@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UNBLOCKED Judge Portal</title>
+    <link rel="stylesheet" href="styles.css?v=judge-portal-14">
+  </head>
+  <body class="judge-portal-page">
+    <header class="site-topbar">
+      <a class="brand" href="index.html">UNBLOCKED</a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="index.html" aria-current="page">Judge Portal</a>
+      </nav>
+    </header>
+
+    <main class="judge-shell">
+      <aside class="judge-sidebar" aria-label="Judge portal navigation">
+        <div class="judge-profile">
+          <span class="profile-mark">SJ</span>
+          <div>
+            <strong>Sarah Lee</strong>
+            <span>Judge, Ownership 2026</span>
+          </div>
+        </div>
+
+        <nav class="portal-nav">
+          <button class="is-active" type="button" data-view-target="dashboard">Dashboard</button>
+          <button type="button" data-view-target="round-one">Round 1 Review</button>
+          <button type="button" data-view-target="round-two" data-requires-complete>Round 2 Review</button>
+          <button type="button" data-view-target="finalists" data-requires-complete>Finalists</button>
+          <button type="button" data-view-target="deliberation" data-requires-complete>Deliberation</button>
+          <button type="button" data-view-target="results" data-requires-complete>Results</button>
+        </nav>
+
+        <section class="sidebar-card">
+          <h2>Judging Criteria</h2>
+          <ul>
+            <li>Theme Relevance</li>
+            <li>Concept</li>
+            <li>Execution</li>
+            <li>Creativity</li>
+          </ul>
+        </section>
+      </aside>
+
+      <section class="portal-workspace">
+        <section class="portal-view is-active" id="dashboard" data-view="dashboard">
+          <div class="page-heading">
+            <p class="eyebrow">Judge Portal</p>
+            <h1>Ownership Poster Review</h1>
+            <p>Swipe through Round 1, then rate the posters that advance with category stars in Round 2.</p>
+          </div>
+
+          <div class="status-grid">
+            <article class="status-card highlight">
+              <span>Current round</span>
+              <strong data-current-round>Round 1 Active</strong>
+              <p data-current-round-note>Swipe each poster in order. The next poster unlocks after your Yes or No decision.</p>
+            </article>
+            <article class="status-card">
+              <span>Reviewed</span>
+              <strong><span data-reviewed-count>0</span>/10</strong>
+              <p>Your progress saves in this prototype session.</p>
+            </article>
+            <article class="status-card">
+              <span>Round 2 unlock</span>
+              <strong data-round-two-status>Locked</strong>
+              <p data-round-two-note>Complete all 10 Round 1 decisions to open category ratings.</p>
+            </article>
+            <article class="status-card">
+              <span>Results</span>
+              <strong data-results-status>Hidden</strong>
+              <p data-results-note>Rankings calculate only after all Round 2 star ratings are submitted.</p>
+            </article>
+          </div>
+
+          <section class="round-picker" aria-label="Review rounds">
+            <button class="round-card" type="button" data-view-target="round-one">
+              <span>Round 1</span>
+              <strong>Yes / No swipe</strong>
+              <small>Swipe left for No or right for Yes.</small>
+            </button>
+            <button class="round-card" type="button" data-view-target="round-two" data-requires-complete>
+              <span>Round 2</span>
+              <strong>Category ratings</strong>
+              <small>Rate each advancing poster out of 10 stars.</small>
+            </button>
+            <button class="round-card muted" type="button" data-view-target="deliberation" data-requires-complete>
+              <span>Final stage</span>
+              <strong>Deliberation</strong>
+              <small>Compare judge notes and discuss the strongest work.</small>
+            </button>
+          </section>
+
+          <section class="queue-preview">
+            <div class="section-title">
+              <h2>Submission Queue</h2>
+              <button class="text-button" type="button" data-view-target="round-one">Start reviewing</button>
+            </div>
+            <div class="submission-grid" data-submission-grid></div>
+          </section>
+        </section>
+
+        <section class="portal-view" id="round-one" data-view="round-one">
+          <div class="review-header">
+            <div>
+              <p class="eyebrow">Round 1</p>
+              <h1>Swipe Review</h1>
+            </div>
+            <div class="review-tools">
+              <button class="ghost-button" type="button" data-prev-submission>Previous</button>
+              <strong data-position-label>1 of 10</strong>
+              <button class="ghost-button" type="button" data-next-submission>Next</button>
+            </div>
+          </div>
+          <p class="workflow-note" data-workflow-note>Review poster 1 to unlock poster 2.</p>
+
+          <div class="swipe-review">
+            <article class="swipe-card" data-swipe-card>
+              <div class="poster-stage">
+                <div class="poster-art ownership-01" data-poster-art>
+                  <span data-poster-title>Poster Title</span>
+                </div>
+              </div>
+
+              <div class="swipe-meta">
+                <h2 data-review-title>The Locked Garden</h2>
+              </div>
+            </article>
+
+            <div class="swipe-actions" aria-label="Round 1 decision">
+              <button class="swipe-button reject" type="button" data-swipe-left>
+                <span>Swipe left</span>
+                No
+                <small>Not through</small>
+              </button>
+              <button class="swipe-button accept" type="button" data-swipe-right>
+                <span>Swipe right</span>
+                Yes
+                <small>Send to Round 2</small>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="portal-view" id="round-two" data-view="round-two">
+          <div data-round-two-content></div>
+        </section>
+
+        <section class="portal-view" id="finalists" data-view="finalists">
+          <div class="page-heading tight">
+            <p class="eyebrow">Finalists</p>
+            <h1>Finalist Ranking</h1>
+            <p>Calculated ranking from Round 2 star ratings.</p>
+          </div>
+          <div data-finalists-content></div>
+        </section>
+
+        <section class="portal-view" id="deliberation" data-view="deliberation">
+          <div class="page-heading tight">
+            <p class="eyebrow">Deliberation</p>
+            <h1>Meeting Hub</h1>
+          </div>
+          <div class="meeting-grid" data-deliberation-content>
+            <article class="meeting-card">
+              <span>May 25, 2026</span>
+              <h2>Final Deliberation</h2>
+              <p>15:00 UTC. Review top submissions, rating variance, and flagged entries.</p>
+              <button class="primary-button" type="button">Join call</button>
+            </article>
+            <article class="resource-card">
+              <h2>Resources</h2>
+              <a href="#finalists" data-view-target="finalists">Finalist ranking</a>
+              <a href="#round-one" data-view-target="round-one">Round 1 decisions</a>
+              <a href="#dashboard" data-view-target="dashboard">Competition overview</a>
+            </article>
+          </div>
+        </section>
+
+        <section class="portal-view" id="results" data-view="results">
+          <div class="page-heading tight">
+            <p class="eyebrow">Results</p>
+            <h1>Archive Preview</h1>
+            <p>Calculated results appear here after Round 2 ratings are complete.</p>
+          </div>
+          <div data-results-content></div>
+        </section>
+
+        <section class="reset-panel">
+          <div>
+            <h2>Start Over</h2>
+            <p>Clear all decisions, ratings, locks, and calculated results.</p>
+          </div>
+          <button class="ghost-button danger-button" type="button" data-reset-portal>Reset judging</button>
+        </section>
+      </section>
+    </main>
+
+    <script src="script.js?v=judge-portal-14"></script>
+  </body>
+</html>
