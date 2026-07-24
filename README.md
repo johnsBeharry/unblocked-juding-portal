@@ -112,3 +112,6 @@ Remaining one-time steps:
   sniffed by magic bytes, size-capped; submissions only while status `open`.
 - Mutations reject cross-site requests (`Sec-Fetch-Site`); all rendered
   strings are HTML-escaped; strict CSP + nosniff via `public/_headers`.
+
+https://www.figma.com/board/49QT6xEIr4D20DAkNX3jPv/UNBLOCKED-JUDGING-SYSTEM-V1?node-id=0-1&p=f&t=RCqzfnMuIfslMDJP-0
+- This figma link contains the judge and admin experience journey and platform architecture, think it will be usefull for the AI thats building it.
