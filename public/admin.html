@@ -3,31 +3,31 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>UNBLOCKED Judge Portal</title>
+    <title>UNBLOCKED Admin Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <link rel="stylesheet" href="styles.css?v=judge-portal-15">
   </head>
-  <body class="judge-portal-page">
+  <body class="judge-portal-page admin-page">
     <header class="site-topbar">
       <a class="brand" href="/">UNBLOCKED</a>
       <nav class="site-nav" aria-label="Main navigation">
-        <a href="/" aria-current="page">Judge Portal</a>
-        <a href="/admin.html" data-staff-link hidden>Admin Console</a>
+        <a href="/">Judge Portal</a>
+        <a href="/admin.html" aria-current="page">Admin Console</a>
       </nav>
     </header>
 
     <main id="app" class="judge-shell" data-app>
-      <section class="portal-gate" data-gate>
+      <section class="portal-gate">
         <article class="locked-panel">
           <span>Loading</span>
-          <h2>Loading the portal…</h2>
-          <p>Checking your judge access.</p>
+          <h2>Loading the console…</h2>
+          <p>Checking your access.</p>
         </article>
       </section>
     </main>
 
-    <script src="portal.js?v=judge-portal-15"></script>
+    <script src="admin.js?v=judge-portal-15"></script>
   </body>
 </html>
