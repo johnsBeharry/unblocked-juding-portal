@@ -2040,3 +2040,109 @@ body.judge-portal-page .profile-mark {
   padding: 0;
   font-size: 12px;
 }
+
+/* ---------- welcome-email compose modal ---------- */
+
+.portal-popup.wide {
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.compose-field {
+  display: block;
+  margin: 0 0 14px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.compose-field input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font-weight: 600;
+  text-transform: none;
+}
+
+.compose-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.compose-tabs button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.compose-tabs button.is-active {
+  border-color: transparent;
+  color: white;
+  background: linear-gradient(180deg, var(--blue), var(--purple-dark));
+}
+
+.compose-body {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.compose-body:focus,
+.compose-field input:focus {
+  border-color: var(--purple);
+  outline: 2px solid rgba(244, 168, 192, 0.28);
+}
+
+.compose-preview {
+  max-height: 320px;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-y: auto;
+  background: #e8e8ea;
+}
+
+.compose-preview-frame {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: Inter, Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.compose-preview-kicker {
+  margin: 0 0 16px;
+  color: #767676;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}

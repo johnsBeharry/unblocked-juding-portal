@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AppEnv } from "../types";
 import { SESSION_COOKIE, adminEmails, csrfGuard } from "../auth";
+import { emailShell, sendEmail } from "../email";
 import { randomToken, sha256Hex } from "../util";
 
 /**
@@ -21,17 +22,11 @@ const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const MAX_LINKS_PER_WINDOW = 3;
 
 function loginEmail(link: string): string {
-  return `<!doctype html>
-<div style="margin:0 auto;max-width:460px;padding:36px 24px;background:#101010;border-radius:10px;font-family:Inter,system-ui,sans-serif">
-  <p style="margin:0 0 24px;color:#f4a8c0;font-size:22px;font-weight:800;letter-spacing:.02em">UNBLOCKED</p>
-  <p style="margin:0 0 8px;color:#f6eef2;font-size:16px;font-weight:700">Sign in to the judging portal</p>
-  <p style="margin:0 0 24px;color:#cba9ba;font-size:14px;line-height:1.5">
-    This link signs you in once and expires in ${LINK_TTL_MINUTES} minutes.
-    If you didn't request it, you can ignore this email.</p>
-  <a href="${link}" style="display:inline-block;padding:13px 22px;background:#2850fe;border-radius:8px;color:#ffffff;font-size:14px;font-weight:800;text-decoration:none">Sign in</a>
-  <p style="margin:24px 0 0;color:#967d89;font-size:12px;line-height:1.5;word-break:break-all">
-    Or paste this link into your browser:<br>${link}</p>
-</div>`;
+  return emailShell(`
+    <p style="margin:0 0 16px">Click below to sign in to the UNBLOCKED judging portal. This link works once and expires in ${LINK_TTL_MINUTES} minutes.</p>
+    <p style="margin:0 0 20px"><a href="${link}" style="color:#2850fe;text-decoration:underline">Sign in to UNBLOCKED Judging</a></p>
+    <p style="margin:0 0 16px;font-size:13px;color:#767676">Or paste this link into your browser:<br>${link}</p>
+    <p style="margin:0;font-size:13px;color:#767676">If you didn't request this, you can ignore this email.</p>`);
 }
 
 auth.post("/api/auth/request-link", async (c) => {
@@ -58,8 +53,6 @@ auth.post("/api/auth/request-link", async (c) => {
     .first<{ n: number }>();
   if ((recent?.n ?? 0) >= MAX_LINKS_PER_WINDOW) return c.json({ error: "too_many_requests" }, 429);
 
-  if (!c.env.RESEND_API_KEY) return c.json({ error: "email_not_configured" }, 500);
-
   const rawToken = randomToken(32);
   await c.env.DB.prepare(
     `INSERT INTO auth_tokens (email, token_hash, expires_at)
@@ -69,23 +62,12 @@ auth.post("/api/auth/request-link", async (c) => {
     .run();
 
   const link = `${new URL(c.req.url).origin}/auth/callback?token=${rawToken}`;
-  const sent = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${c.env.RESEND_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      from: c.env.MAIL_FROM || "UNBLOCKED Judging <onboarding@resend.dev>",
-      to: [email],
-      subject: "Your UNBLOCKED judging sign-in link",
-      html: loginEmail(link),
-    }),
+  const sent = await sendEmail(c.env, {
+    to: email,
+    subject: "Your UNBLOCKED judging sign-in link",
+    html: loginEmail(link),
   });
-  if (!sent.ok) {
-    console.error("resend_error", sent.status, await sent.text());
-    return c.json({ error: "email_send_failed" }, 502);
-  }
+  if (!sent.ok) return c.json({ error: sent.error }, 502);
   return c.json({ ok: true });
 });
 

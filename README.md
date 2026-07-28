@@ -19,10 +19,11 @@ public/          Static frontend (Worker assets)
 src/
   index.ts       Worker entry: routing, R2 file serving
   auth.ts        Session authentication, roles, CSRF guard
+  email.ts       Plain-email template, minimal markdown renderer, Resend sender
   routes/
     auth.ts      Magic-link sign-in via Resend (request-link, callback, logout)
     portal.ts    Judge endpoints (votes, ratings, contest view)
-    admin.ts     Contest/judge/user/API-key management, CSV export
+    admin.ts     Contest/judge/user/API-key management, welcome emails, CSV export
     external.ts  /api/v1 submission intake (API-key auth)
   results.ts     Panel-wide score aggregation
 migrations/      D1 schema
@@ -46,9 +47,19 @@ one-time link (15-minute expiry, single use) sent through
 Tokens and sessions are stored only as SHA-256 hashes. Unknown emails get the
 same "link sent" response but no email, so panel membership can't be probed.
 
-Inviting a judge is just: add their email in the admin console and send them
-the portal URL. Emails in `ADMIN_EMAILS` (wrangler.jsonc) are auto-provisioned
-as admins the first time they request a link.
+Inviting a judge is just: add their email in the admin console. Emails in
+`ADMIN_EMAILS` (wrangler.jsonc) are auto-provisioned as admins the first time
+they request a link.
+
+Adding a judge or user who hasn't been welcomed yet opens a compose modal —
+subject and body are pre-filled but nothing sends until you review, optionally
+edit, and click Send. Every send (and any failure) is logged to the
+`invite_emails` table, so the Users and judging-panel tables show whether —
+and when — each person was actually emailed, with a Resend button for anyone
+who wasn't. Email bodies use a small trusted markdown subset (`**bold**`,
+`[text](url)`, `- ` bullets) and render as a plain, client-agnostic email —
+white background, Inter with system fallback, blue links, no branded chrome —
+consistent with the sign-in email.
 
 Setup:
 

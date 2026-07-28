@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv, ContestRow, ContestStatus, SubmissionRow } from "../types";
 import { CONTEST_STATUSES } from "../types";
 import { requireRole } from "../auth";
+import { emailShell, renderMarkdown, sendEmail } from "../email";
 import { computeResults } from "../results";
 import { parseCriteria, parseJsonObject, randomToken, sha256Hex, slugify } from "../util";
 
@@ -107,7 +108,9 @@ admin.get("/contests/:id", async (c) => {
        (SELECT COUNT(*) FROM round1_votes v JOIN submissions s ON s.id = v.submission_id
         WHERE s.contest_id = ? AND v.judge_id = u.id) AS round1_votes,
        (SELECT COUNT(*) FROM round2_ratings r JOIN submissions s ON s.id = r.submission_id
-        WHERE s.contest_id = ? AND r.judge_id = u.id AND s.advanced = 1) AS round2_ratings
+        WHERE s.contest_id = ? AND r.judge_id = u.id AND s.advanced = 1) AS round2_ratings,
+       (SELECT created_at FROM invite_emails ie WHERE ie.user_id = u.id AND ie.status = 'sent'
+        ORDER BY ie.id DESC LIMIT 1) AS invite_sent_at
      FROM contest_judges cj JOIN users u ON u.id = cj.user_id
      WHERE cj.contest_id = ? ORDER BY u.email`,
   )
@@ -144,16 +147,16 @@ admin.post("/contests/:id/judges", async (c) => {
   const email = String(body?.email || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return c.json({ error: "invalid_email" }, 400);
 
-  let user = await c.env.DB.prepare("SELECT id, email, name, role FROM users WHERE email = ?")
+  const existing = await c.env.DB.prepare("SELECT id, email, name, role FROM users WHERE email = ?")
     .bind(email)
     .first<{ id: number }>();
-  if (!user) {
-    user = await c.env.DB.prepare(
+  const user =
+    existing ||
+    (await c.env.DB.prepare(
       "INSERT INTO users (email, name, role) VALUES (?, ?, 'judge') RETURNING id, email, name, role",
     )
       .bind(email, String(body?.name || "").trim())
-      .first<{ id: number }>();
-  }
+      .first<{ id: number }>());
 
   await c.env.DB.prepare(
     "INSERT OR IGNORE INTO contest_judges (contest_id, user_id) VALUES (?, ?)",
@@ -161,7 +164,13 @@ admin.post("/contests/:id/judges", async (c) => {
     .bind(contest.id, user!.id)
     .run();
 
-  return c.json({ ok: true, user }, 201);
+  const invited = await c.env.DB.prepare(
+    "SELECT 1 FROM invite_emails WHERE user_id = ? AND status = 'sent'",
+  )
+    .bind(user!.id)
+    .first();
+
+  return c.json({ ok: true, user, isNewUser: !existing, inviteSent: Boolean(invited) }, 201);
 });
 
 admin.delete("/contests/:id/judges/:userId", async (c) => {
@@ -247,7 +256,10 @@ admin.get("/contests/:id/export.csv", async (c) => {
 
 admin.get("/users", requireRole("admin"), async (c) => {
   const users = await c.env.DB.prepare(
-    "SELECT id, email, name, role, created_at, last_seen_at FROM users ORDER BY role, email",
+    `SELECT u.id, u.email, u.name, u.role, u.created_at, u.last_seen_at,
+       (SELECT created_at FROM invite_emails ie WHERE ie.user_id = u.id AND ie.status = 'sent'
+        ORDER BY ie.id DESC LIMIT 1) AS invite_sent_at
+     FROM users u ORDER BY u.role, u.email`,
   ).all();
   return c.json({ users: users.results });
 });
@@ -259,6 +271,8 @@ admin.post("/users", requireRole("admin"), async (c) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return c.json({ error: "invalid_email" }, 400);
   if (!["admin", "manager", "judge"].includes(role)) return c.json({ error: "invalid_role" }, 400);
 
+  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+
   const user = await c.env.DB.prepare(
     `INSERT INTO users (email, name, role) VALUES (?, ?, ?)
      ON CONFLICT (email) DO UPDATE SET role = excluded.role,
@@ -266,9 +280,50 @@ admin.post("/users", requireRole("admin"), async (c) => {
      RETURNING id, email, name, role`,
   )
     .bind(email, String(body?.name || "").trim(), role)
+    .first<{ id: number }>();
+
+  const invited = await c.env.DB.prepare(
+    "SELECT 1 FROM invite_emails WHERE user_id = ? AND status = 'sent'",
+  )
+    .bind(user!.id)
     .first();
 
-  return c.json({ user }, 201);
+  return c.json({ user, isNewUser: !existing, inviteSent: Boolean(invited) }, 201);
+});
+
+admin.post("/users/:id/invite-email", async (c) => {
+  const target = await c.env.DB.prepare("SELECT id, email FROM users WHERE id = ?")
+    .bind(Number(c.req.param("id")))
+    .first<{ id: number; email: string }>();
+  if (!target) return c.json({ error: "not_found" }, 404);
+
+  const body = await c.req.json().catch(() => null);
+  const subject = String(body?.subject || "").trim().slice(0, 200);
+  const message = String(body?.body || "").trim().slice(0, 5000);
+  if (!subject || !message) return c.json({ error: "subject_and_body_required" }, 400);
+
+  const result = await sendEmail(c.env, {
+    to: target.email,
+    subject,
+    html: emailShell(renderMarkdown(message)),
+  });
+
+  await c.env.DB.prepare(
+    `INSERT INTO invite_emails (user_id, subject, body, status, error, sent_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      target.id,
+      subject,
+      message,
+      result.ok ? "sent" : "failed",
+      result.ok ? null : result.error,
+      c.get("user").id,
+    )
+    .run();
+
+  if (!result.ok) return c.json({ error: result.error }, 502);
+  return c.json({ ok: true });
 });
 
 admin.get("/keys", requireRole("admin"), async (c) => {

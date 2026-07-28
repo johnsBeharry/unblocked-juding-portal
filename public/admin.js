@@ -10,6 +10,7 @@ const state = {
   keys: [],
   newKey: null,           // raw key shown once after creation
   notice: null,
+  compose: null,          // { userId, userEmail, subject, body, mode, sending }
 };
 
 const app = document.querySelector("[data-app]");
@@ -55,6 +56,103 @@ function loginGate(message) {
         </form>
       </article>
     </section>`;
+}
+
+/* ---------- welcome-email compose modal ---------- */
+
+function renderMarkdownPreview(source) {
+  const inlineMd = (text) => {
+    let out = esc(text);
+    out = out.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
+      '<a href="$2" style="color:#2850fe;text-decoration:underline">$1</a>',
+    );
+    out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    return out;
+  };
+  const blocks = source.trim().split(/\n\s*\n/).filter(Boolean);
+  return blocks.map((block) => {
+    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length && lines.every((l) => l.startsWith("- "))) {
+      const items = lines.map((l) => `<li style="margin:0 0 6px">${inlineMd(l.slice(2))}</li>`).join("");
+      return `<ul style="margin:0 0 16px;padding-left:20px">${items}</ul>`;
+    }
+    return `<p style="margin:0 0 16px">${lines.map(inlineMd).join("<br>")}</p>`;
+  }).join("");
+}
+
+function judgeInviteDraft(user, contestName) {
+  const name = user.name || user.email.split("@")[0];
+  return {
+    subject: `You're invited to judge ${contestName}`,
+    body: `Hi ${name},\n\nYou've been added as a judge for **${contestName}** on the UNBLOCKED judging portal.\n\nGo to the [judge portal](${window.location.origin}/) and enter this email address (${user.email}) — you'll get a one-time sign-in link, no password needed.\n\nThanks for judging!`,
+  };
+}
+
+function accountInviteDraft(user) {
+  const name = user.name || user.email.split("@")[0];
+  const roleLabel = user.role === "admin" ? "an administrator" : user.role === "manager" ? "a contest manager" : "a judge";
+  return {
+    subject: "You're invited to UNBLOCKED Judging",
+    body: `Hi ${name},\n\nYou've been added as ${roleLabel} on the UNBLOCKED judging admin console.\n\nGo to the [admin console](${window.location.origin}/admin.html) and enter this email address (${user.email}) — you'll get a one-time sign-in link, no password needed.`,
+  };
+}
+
+function openCompose(user, draft) {
+  state.compose = {
+    userId: user.id,
+    userEmail: user.email,
+    subject: draft.subject,
+    body: draft.body,
+    mode: "edit",
+    sending: false,
+  };
+  render();
+}
+
+function syncComposeFromDom() {
+  if (!state.compose) return;
+  const subjectInput = document.querySelector("[data-compose-subject]");
+  const bodyInput = document.querySelector("[data-compose-body]");
+  if (subjectInput) state.compose.subject = subjectInput.value;
+  if (bodyInput) state.compose.body = bodyInput.value;
+}
+
+function composeModalMarkup() {
+  const cm = state.compose;
+  if (!cm) return "";
+  return `
+    <div class="portal-popup-backdrop" data-compose-backdrop>
+      <article class="portal-popup wide" role="dialog" aria-modal="true" aria-labelledby="compose-title">
+        <span>Welcome email</span>
+        <h2 id="compose-title">Send to ${esc(cm.userEmail)}</h2>
+        <p>Nothing sends until you click Send — edit as needed first.</p>
+
+        <label class="compose-field">Subject
+          <input type="text" data-compose-subject value="${esc(cm.subject)}" maxlength="200">
+        </label>
+
+        <div class="compose-tabs">
+          <button type="button" class="${cm.mode === "edit" ? "is-active" : ""}" data-compose-mode="edit">Edit</button>
+          <button type="button" class="${cm.mode === "preview" ? "is-active" : ""}" data-compose-mode="preview">Preview</button>
+        </div>
+
+        ${cm.mode === "edit"
+          ? `<textarea class="compose-body" data-compose-body rows="10" maxlength="5000">${esc(cm.body)}</textarea>
+             <p class="workflow-note">Basic markdown: **bold**, [link text](https://…), and "- " bullet lists.</p>`
+          : `<div class="compose-preview">
+               <div class="compose-preview-frame">
+                 <p class="compose-preview-kicker">UNBLOCKED Judging</p>
+                 ${renderMarkdownPreview(cm.body)}
+               </div>
+             </div>`}
+
+        <div class="popup-actions">
+          <button class="ghost-button" type="button" data-compose-skip ${cm.sending ? "disabled" : ""}>Skip for now</button>
+          <button class="primary-button" type="button" data-compose-send ${cm.sending ? "disabled" : ""}>${cm.sending ? "Sending…" : "Send email"}</button>
+        </div>
+      </article>
+    </div>`;
 }
 
 const STATUS_FLOW = ["draft", "open", "round1", "round2", "deliberation", "complete", "archived"];
@@ -209,15 +307,19 @@ function contestDetailMarkup() {
       <section class="archive-card">
         <h2>Judging Panel (${d.judges.length})</h2>
         <table class="admin-table">
-          <thead><tr><th>Judge</th><th>Round 1</th><th>Round 2</th><th></th></tr></thead>
+          <thead><tr><th>Judge</th><th>Round 1</th><th>Round 2</th><th>Welcome email</th><th></th></tr></thead>
           <tbody>
             ${d.judges.map((j) => `
               <tr>
                 <td><strong>${esc(j.name || j.email)}</strong><br><small>${esc(j.email)}</small></td>
                 <td>${j.round1_votes} votes</td>
                 <td>${j.round2_ratings} rated</td>
+                <td>
+                  ${j.invite_sent_at ? `<span class="mini-status">Sent ${esc(j.invite_sent_at)}</span><br>` : ""}
+                  <button class="text-button" type="button" data-send-judge-invite="${j.id}">${j.invite_sent_at ? "Resend" : "Send invite"}</button>
+                </td>
                 <td><button class="text-button" type="button" data-remove-judge="${j.id}">Remove</button></td>
-              </tr>`).join("") || `<tr><td colspan="4">No judges on the panel yet.</td></tr>`}
+              </tr>`).join("") || `<tr><td colspan="5">No judges on the panel yet.</td></tr>`}
           </tbody>
         </table>
         <form class="admin-form inline" data-add-judge>
@@ -225,7 +327,7 @@ function contestDetailMarkup() {
           <label>Name <input name="name" maxlength="120" placeholder="Optional"></label>
           <button class="primary-button" type="submit">Add judge</button>
         </form>
-        <p class="workflow-note">Judges sign in with this email through Cloudflare Access — no password setup needed.</p>
+        <p class="workflow-note">Judges sign in with this email via a one-time emailed link — no password setup needed. Adding a judge prompts a welcome email you can edit before sending.</p>
       </section>
 
       <section class="archive-card">
@@ -262,17 +364,21 @@ function usersMarkup() {
       <div class="page-heading">
         <p class="eyebrow">Admin Console</p>
         <h1>Users</h1>
-        <p>Anyone signing in through Cloudflare Access must exist here (or be listed in ADMIN_EMAILS) to get in.</p>
+        <p>Anyone signing in must exist here (or be listed in ADMIN_EMAILS) to receive a sign-in link.</p>
       </div>
       <section class="archive-card">
         <table class="admin-table">
-          <thead><tr><th>User</th><th>Role</th><th>Last seen</th></tr></thead>
+          <thead><tr><th>User</th><th>Role</th><th>Last seen</th><th>Welcome email</th></tr></thead>
           <tbody>
             ${state.users.map((u) => `
               <tr>
                 <td><strong>${esc(u.name || u.email)}</strong><br><small>${esc(u.email)}</small></td>
                 <td>${esc(u.role)}</td>
                 <td>${esc(u.last_seen_at || "never")}</td>
+                <td>
+                  ${u.invite_sent_at ? `<span class="mini-status">Sent ${esc(u.invite_sent_at)}</span><br>` : ""}
+                  <button class="text-button" type="button" data-send-invite="${u.id}">${u.invite_sent_at ? "Resend" : "Send invite"}</button>
+                </td>
               </tr>`).join("")}
           </tbody>
         </table>
@@ -350,7 +456,8 @@ function render() {
     <section class="portal-workspace">
       ${state.notice ? `<div class="lock-notice">${esc(state.notice)}</div>` : ""}
       ${views[state.view]()}
-    </section>`;
+    </section>
+    ${composeModalMarkup()}`;
   state.notice = null;
 }
 
@@ -459,6 +566,64 @@ document.addEventListener("click", async (event) => {
     await api(`/admin/keys/${revoke.dataset.revokeKey}`, { method: "DELETE" });
     return switchView("keys");
   }
+
+  const sendJudgeInvite = event.target.closest("[data-send-judge-invite]");
+  if (sendJudgeInvite) {
+    const judge = state.contestDetail.judges.find((j) => j.id === Number(sendJudgeInvite.dataset.sendJudgeInvite));
+    if (judge) openCompose(judge, judgeInviteDraft(judge, state.contestDetail.contest.name));
+    return;
+  }
+
+  const sendInvite = event.target.closest("[data-send-invite]");
+  if (sendInvite) {
+    const user = state.users.find((u) => u.id === Number(sendInvite.dataset.sendInvite));
+    if (user) openCompose(user, accountInviteDraft(user));
+    return;
+  }
+
+  if (event.target.closest("[data-compose-mode]")) {
+    syncComposeFromDom();
+    state.compose.mode = event.target.closest("[data-compose-mode]").dataset.composeMode;
+    return render();
+  }
+
+  if (event.target.closest("[data-compose-skip]")) {
+    state.compose = null;
+    return render();
+  }
+
+  const backdrop = event.target.closest("[data-compose-backdrop]");
+  if (backdrop && event.target === backdrop) {
+    state.compose = null;
+    return render();
+  }
+
+  if (event.target.closest("[data-compose-send]")) {
+    syncComposeFromDom();
+    const cm = state.compose;
+    if (!cm.subject.trim() || !cm.body.trim()) {
+      state.notice = "Add a subject and message before sending.";
+      return render();
+    }
+    cm.sending = true;
+    render();
+    const res = await api(`/admin/users/${cm.userId}/invite-email`, {
+      method: "POST",
+      body: JSON.stringify({ subject: cm.subject, body: cm.body }),
+    });
+    state.compose = null;
+    state.notice = res.ok ? `Welcome email sent to ${cm.userEmail}.` : "Couldn't send the email — check the Resend configuration and try again.";
+    if (state.view === "contest") return openContest(state.contestDetail.contest.id);
+    if (state.view === "users") return switchView("users");
+    return render();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.compose) {
+    state.compose = null;
+    render();
+  }
 });
 
 document.addEventListener("submit", async (event) => {
@@ -492,8 +657,13 @@ document.addEventListener("submit", async (event) => {
       method: "POST",
       body: JSON.stringify({ email: data.get("email"), name: data.get("name") }),
     });
-    if (!res.ok) state.notice = "Couldn't add that judge.";
-    return openContest(ct.id);
+    if (!res.ok) {
+      state.notice = "Couldn't add that judge.";
+      return render();
+    }
+    await openContest(ct.id);
+    if (!res.body.inviteSent) openCompose(res.body.user, judgeInviteDraft(res.body.user, ct.name));
+    return;
   }
 
   const addUser = event.target.closest("[data-add-user]");
@@ -504,8 +674,13 @@ document.addEventListener("submit", async (event) => {
       method: "POST",
       body: JSON.stringify({ email: data.get("email"), name: data.get("name"), role: data.get("role") }),
     });
-    if (!res.ok) state.notice = "Couldn't save that user.";
-    return switchView("users");
+    if (!res.ok) {
+      state.notice = "Couldn't save that user.";
+      return render();
+    }
+    await switchView("users");
+    if (!res.body.inviteSent) openCompose(res.body.user, accountInviteDraft(res.body.user));
+    return;
   }
 
   const createKey = event.target.closest("[data-create-key]");
