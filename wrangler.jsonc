@@ -31,10 +31,8 @@
 		"AUTH_MODE": "magic",
 		// Comma-separated emails auto-provisioned as admins on first sign-in.
 		"ADMIN_EMAILS": "team@peakshift.com",
-		// Sender for sign-in emails. Resend's onboarding address only delivers to
-		// the Resend account owner — verify a domain in Resend and change this
-		// to e.g. "UNBLOCKED Judging <judging@peakshift.com>" before inviting judges.
-		"MAIL_FROM": "UNBLOCKED Judging <onboarding@resend.dev>"
+		// Sender for sign-in emails, using the verified mail.pxpush.com domain.
+		"MAIL_FROM": "UNBLOCKED Judging <judging@mail.pxpush.com>"
 		// RESEND_API_KEY is a secret: npx wrangler secret put RESEND_API_KEY
 	},
 	"observability": {
