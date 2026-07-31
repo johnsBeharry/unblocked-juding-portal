@@ -2,12 +2,19 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AppEnv } from "../types";
 import { SESSION_COOKIE, adminEmails, csrfGuard } from "../auth";
-import { emailShell, sendEmail } from "../email";
+import { emailShell, escapeHtml, sendEmail } from "../email";
 import { randomToken, sha256Hex } from "../util";
 
 /**
  * Magic-link sign-in: POST /api/auth/request-link emails a one-time link via
- * Resend; GET /auth/callback exchanges it for a session cookie.
+ * Resend. Signing in is a two-step exchange, not a single GET:
+ *   GET  /auth/callback  validates the token and shows a "confirm" button —
+ *                        it does NOT consume the token or create a session.
+ *   POST /auth/callback  consumes the token and creates the session.
+ * This matters because corporate mail gateways and email clients (Outlook
+ * Safe Links, etc.) prefetch links to scan them, which would silently burn
+ * a one-time token on a GET before the user ever clicks it. Only an explicit
+ * button click (POST) can complete sign-in.
  *
  * Tokens and sessions are stored as SHA-256 hashes only. The request endpoint
  * answers identically for invited and unknown emails so it can't be used to
@@ -71,16 +78,57 @@ auth.post("/api/auth/request-link", async (c) => {
   return c.json({ ok: true });
 });
 
+async function validTokenLookup(c: { env: AppEnv["Bindings"] }, rawToken: string) {
+  if (!rawToken) return null;
+  return c.env.DB.prepare(
+    `SELECT id, email FROM auth_tokens
+     WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')`,
+  )
+    .bind(await sha256Hex(rawToken))
+    .first<{ id: number; email: string }>();
+}
+
+function confirmPage(rawToken: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Confirm sign-in — UNBLOCKED Judging</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="judge-portal-page">
+    <main class="judge-shell" style="grid-template-columns:1fr">
+      <section class="portal-gate">
+        <article class="locked-panel login-card">
+          <span>Sign in</span>
+          <h2>Confirm it's you</h2>
+          <p>For security, links aren't enough on their own — some email apps open them automatically to scan for safety. Click below to finish signing in.</p>
+          <form class="login-form" method="POST" action="/auth/callback">
+            <input type="hidden" name="token" value="${escapeHtml(rawToken)}">
+            <button class="primary-button" type="submit">Complete sign-in</button>
+          </form>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
 auth.get("/auth/callback", async (c) => {
   const rawToken = c.req.query("token") || "";
-  const token = rawToken
-    ? await c.env.DB.prepare(
-        `SELECT id, email FROM auth_tokens
-         WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')`,
-      )
-        .bind(await sha256Hex(rawToken))
-        .first<{ id: number; email: string }>()
-    : null;
+  const token = await validTokenLookup(c, rawToken);
+  if (!token) return c.redirect("/?auth=invalid");
+  return c.html(confirmPage(rawToken));
+});
+
+auth.post("/auth/callback", async (c) => {
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const rawToken = typeof form.token === "string" ? form.token : "";
+  const token = await validTokenLookup(c, rawToken);
   if (!token) return c.redirect("/?auth=invalid");
 
   await c.env.DB.prepare("UPDATE auth_tokens SET used_at = datetime('now') WHERE id = ?")
