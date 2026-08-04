@@ -7,13 +7,19 @@
     "deploy": "wrangler deploy",
     "types": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply unblocked-judging --local",
-    "migrate:remote": "wrangler d1 migrations apply unblocked-judging --remote"
+    "migrate:remote": "wrangler d1 migrations apply unblocked-judging --remote",
+    "ladle:serve": "ladle serve",
+    "ladle:build": "ladle build"
   },
   "dependencies": {
     "hono": "^4.6.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
+    "@ladle/react": "^5.1.1",
+    "gsap": "^3.15.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^5.5.0",
     "wrangler": "^4.0.0"
   }

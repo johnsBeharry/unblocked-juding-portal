@@ -6,28 +6,27 @@
     <title>UNBLOCKED Judge Portal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="styles.css?v=judge-portal-15">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+    <link rel="stylesheet" href="styles.css?v=judge-portal-16">
   </head>
-  <body class="judge-portal-page">
-    <header class="site-topbar">
-      <a class="brand" href="/">UNBLOCKED</a>
-      <nav class="site-nav" aria-label="Main navigation">
-        <a href="/" aria-current="page">Judge Portal</a>
-        <a href="/admin.html" data-staff-link hidden>Admin Console</a>
-      </nav>
+  <body>
+    <header>
+      <ub-header-bar role-label="Judge Portal" other-label="Admin Console" other-href="/admin.html" other-hidden></ub-header-bar>
     </header>
 
-    <main id="app" class="judge-shell" data-app>
-      <section class="portal-gate" data-gate>
-        <article class="locked-panel">
-          <span>Loading</span>
+    <main id="app" class="t-app-shell" data-app>
+      <section class="o-portal-gate" data-gate>
+        <article class="t-gate-panel">
+          <span class="a-section-tag">Loading</span>
           <h2>Loading the portal…</h2>
           <p>Checking your judge access.</p>
         </article>
       </section>
     </main>
 
-    <script src="portal.js?v=judge-portal-15"></script>
+    <script src="vendor/gsap.min.js"></script>
+    <script src="unblocked-motion.js?v=judge-portal-16"></script>
+    <script type="module" src="components/index.js?v=judge-portal-16"></script>
+    <script src="portal.js?v=judge-portal-16"></script>
   </body>
 </html>

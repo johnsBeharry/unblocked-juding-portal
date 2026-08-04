@@ -34,9 +34,9 @@ async function api(path, options = {}) {
 
 function gate(kicker, title, text) {
   app.innerHTML = `
-    <section class="portal-gate">
-      <article class="locked-panel">
-        <span>${esc(kicker)}</span>
+    <section class="o-portal-gate">
+      <article class="t-gate-panel">
+        <span class="a-section-tag">${esc(kicker)}</span>
         <h2>${esc(title)}</h2>
         <p>${esc(text)}</p>
       </article>
@@ -45,14 +45,14 @@ function gate(kicker, title, text) {
 
 function loginGate(message) {
   app.innerHTML = `
-    <section class="portal-gate">
-      <article class="locked-panel login-card">
-        <span>Sign in</span>
+    <section class="o-portal-gate">
+      <article class="t-gate-panel login-card">
+        <span class="a-section-tag">Sign in</span>
         <h2>UNBLOCKED Judging</h2>
         <p>${esc(message || "Enter your invited email and we'll send you a one-time sign-in link.")}</p>
-        <form class="login-form" data-login-form>
-          <input type="email" name="email" required placeholder="you@example.com" autocomplete="email">
-          <button class="primary-button" type="submit">Email me a sign-in link</button>
+        <form class="o-login-form" data-login-form>
+          <input class="a-input-text" type="email" name="email" required placeholder="you@example.com" autocomplete="email">
+          <button class="a-action-trigger a-action-trigger--primary" type="submit">Email me a sign-in link</button>
         </form>
       </article>
     </section>`;
@@ -88,6 +88,8 @@ document.addEventListener("click", async (event) => {
 });
 
 /* ---------- data helpers ---------- */
+
+const STAGE_ORDER = ["draft", "open", "round1", "round2", "deliberation", "complete"];
 
 const STATUS_LABELS = {
   draft: "Draft",
@@ -144,18 +146,9 @@ function canOpenRoundOne(index) {
 
 /* ---------- shared markup ---------- */
 
-function posterMedia(sub, extraClass = "") {
-  if (sub.fileUrl && sub.fileType?.startsWith("image/")) {
-    return `<div class="poster-art poster-photo ${extraClass}"><img src="${esc(sub.fileUrl)}" alt="${esc(sub.title)}" loading="lazy"></div>`;
-  }
-  if (sub.fileUrl && sub.fileType === "video/mp4") {
-    return `<div class="poster-art poster-photo ${extraClass}"><video src="${esc(sub.fileUrl)}" controls muted playsinline></video></div>`;
-  }
-  if (sub.fileUrl && sub.fileType === "application/pdf") {
-    return `<div class="poster-art poster-pdf ${extraClass}"><a href="${esc(sub.fileUrl)}" target="_blank" rel="noopener">Open PDF<span>${esc(sub.title)}</span></a></div>`;
-  }
-  const artClass = `ownership-${String((sub.id % 10) + 1).padStart(2, "0")}`;
-  return `<div class="poster-art ${artClass} ${extraClass}"><span>${esc(sub.title)}</span></div>`;
+function posterThumbTag(sub, variant) {
+  return `<ub-poster-thumb variant="${variant}" src="${esc(sub.fileUrl || "")}"
+    file-type="${esc(sub.fileType || "")}" title="${esc(sub.title)}" art-seed="${sub.id}"></ub-poster-thumb>`;
 }
 
 function statusLabel(status) {
@@ -164,11 +157,23 @@ function statusLabel(status) {
 
 function lockedPanel(title, text) {
   return `
-    <article class="locked-panel">
-      <span>Locked</span>
+    <article class="t-gate-panel">
+      <span class="a-section-tag">Locked</span>
       <h2>${esc(title)}</h2>
       <p>${esc(text)}</p>
     </article>`;
+}
+
+function stageNavMarkup() {
+  const status = contest().status;
+  return `
+    <nav class="o-stage-nav" aria-label="Contest stage">
+      ${STAGE_ORDER.map((stage) => `<span class="o-stage-nav__item${stage === status ? " o-stage-nav__item--active" : ""}">${esc(STATUS_LABELS[stage])}</span>`).join("")}
+    </nav>`;
+}
+
+function criteriaBarMarkup() {
+  return `<ub-criteria-bar criteria='${esc(JSON.stringify(contest().criteria))}'></ub-criteria-bar>`;
 }
 
 /* ---------- sidebar ---------- */
@@ -184,40 +189,38 @@ function sidebarMarkup() {
 
   const picker = state.contests.length > 1
     ? `<label class="contest-picker">Contest
-         <select data-contest-picker>
+         <select class="a-input-select" data-contest-picker>
            ${state.contests.map((ct) => `<option value="${ct.id}" ${ct.id === state.contestId ? "selected" : ""}>${esc(ct.name)}</option>`).join("")}
          </select>
        </label>`
     : "";
 
-  const navButton = (view, label) => {
+  const navItem = (view, label) => {
     const locked = !viewUnlocked(view);
-    return `<button type="button" data-view-target="${view}"
-      class="${state.view === view ? "is-active" : ""} ${locked ? "is-locked" : ""}"
-      aria-disabled="${locked}">${esc(label)}</button>`;
+    return `<ub-nav-link view="${view}" label="${esc(label)}" ${state.view === view ? "active" : ""} ${locked ? "locked" : ""}></ub-nav-link>`;
   };
 
   return `
-    <aside class="judge-sidebar" aria-label="Judge portal navigation">
-      <div class="judge-profile">
-        <span class="profile-mark">${esc(initials || "J")}</span>
+    <aside class="o-nav-sidebar" aria-label="Judge portal navigation">
+      <div class="m-profile-card">
+        <span class="m-profile-card__mark">${esc(initials || "J")}</span>
         <div>
-          <strong>${esc(user.name || user.email)}</strong>
-          <span>${esc(roleLine)}</span>
-          <button class="text-button signout-button" type="button" data-logout>Sign out</button>
+          <strong class="m-profile-card__name">${esc(user.name || user.email)}</strong>
+          <span class="m-profile-card__role">${esc(roleLine)}</span>
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-logout>Sign out</button>
         </div>
       </div>
       ${picker}
-      <nav class="portal-nav">
-        ${navButton("dashboard", "Dashboard")}
-        ${navButton("round-one", "Round 1 Review")}
-        ${navButton("round-two", "Round 2 Review")}
-        ${navButton("finalists", "Finalists")}
-        ${navButton("deliberation", "Deliberation")}
-        ${navButton("results", "Results")}
+      <nav class="o-portal-nav">
+        ${navItem("dashboard", "Dashboard")}
+        ${navItem("round-one", "Round 1 Review")}
+        ${navItem("round-two", "Round 2 Review")}
+        ${navItem("finalists", "Finalists")}
+        ${navItem("deliberation", "Deliberation")}
+        ${navItem("results", "Results")}
       </nav>
-      <section class="sidebar-card">
-        <h2>Judging Criteria</h2>
+      <section class="o-sidebar-list">
+        <span class="a-section-tag">Judging Criteria</span>
         <ul>${contest().criteria.map((crit) => `<li>${esc(crit)}</li>`).join("")}</ul>
       </section>
     </aside>`;
@@ -243,62 +246,51 @@ function dashboardMarkup() {
 
   return `
     <section class="portal-view is-active">
-      <div class="page-heading">
-        <p class="eyebrow">Judge Portal</p>
+      ${stageNavMarkup()}
+      <div class="t-page-heading">
+        <p class="a-section-tag">Judge Portal</p>
         <h1>${esc(ct.name)}</h1>
         <p>${esc(ct.description || ct.theme || "")}</p>
       </div>
 
-      <div class="status-grid">
-        <article class="status-card highlight">
-          <span>Contest status</span>
-          <strong>${esc(statusLabel(status))}</strong>
-          <p>${esc(roundNote)}</p>
-        </article>
-        <article class="status-card">
-          <span>Round 1 progress</span>
-          <strong>${round1Done()}/${total}</strong>
-          <p>Your Yes/No decisions, saved to the judging server.</p>
-        </article>
-        <article class="status-card">
-          <span>Round 2 progress</span>
-          <strong>${viewUnlocked("round-two") ? `${round2Done()}/${advancedSubs().length}` : "Locked"}</strong>
-          <p>${viewUnlocked("round-two") ? "Advancing posters you have fully rated." : "Opens when the manager starts Round 2."}</p>
-        </article>
-        <article class="status-card">
-          <span>Results</span>
-          <strong>${viewUnlocked("results") ? "Available" : "Hidden"}</strong>
-          <p>${viewUnlocked("results") ? "Aggregated across the full judging panel." : "Rankings appear once deliberation begins."}</p>
-        </article>
+      <div class="o-status-grid">
+        <ub-status-tile highlight label="Contest status" value="${esc(statusLabel(status))}" desc="${esc(roundNote)}"></ub-status-tile>
+        <ub-status-tile label="Round 1 progress" value="${round1Done()}/${total}" desc="Your Yes/No decisions, saved to the judging server."></ub-status-tile>
+        <ub-status-tile label="Round 2 progress" value="${viewUnlocked("round-two") ? `${round2Done()}/${advancedSubs().length}` : "Locked"}"
+          ${viewUnlocked("round-two") ? "" : "muted"}
+          desc="${viewUnlocked("round-two") ? "Advancing posters you have fully rated." : "Opens when the manager starts Round 2."}"></ub-status-tile>
+        <ub-status-tile label="Results" value="${viewUnlocked("results") ? "Available" : "Hidden"}"
+          ${viewUnlocked("results") ? "" : "muted"}
+          desc="${viewUnlocked("results") ? "Aggregated across the full judging panel." : "Rankings appear once deliberation begins."}"></ub-status-tile>
       </div>
 
       ${judgingStarted ? `
-      <section class="queue-preview">
-        <div class="section-title">
+      <section>
+        <div class="o-queue-section__header">
           <h2>Submission Queue</h2>
-          ${status === "round1" ? `<button class="text-button" type="button" data-view-target="round-one">Start reviewing</button>` : ""}
+          ${status === "round1" ? `<button class="a-action-trigger" type="button" data-view-target="round-one">Start reviewing</button>` : ""}
         </div>
-        <div class="submission-grid">
+        <div class="o-submission-grid">
           ${submissions().map((sub, index) => {
             const decision = myVote(sub.id);
             const locked = status === "round1" && !canOpenRoundOne(index);
-            const chip = decision ? (decision === "yes" ? "Yes" : "No") : locked ? "Locked" : "Ready";
+            const chip = decision ? (decision === "yes" ? "(Yes)" : "(No)") : locked ? "(Locked)" : "(Ready)";
             return `
-              <article class="submission-card ${decision ? "is-reviewed" : ""} ${locked ? "is-locked" : ""}">
+              <article class="m-submission-card ${decision ? "is-reviewed" : ""} ${locked ? "is-locked" : ""}">
                 <button type="button" data-open-submission="${index}" ${locked ? "disabled" : ""}>
-                  ${posterMedia(sub, "poster-thumb")}
-                  <span class="submission-card-body">
+                  ${posterThumbTag(sub, "thumb")}
+                  <span class="m-submission-card__body">
                     <strong>${esc(sub.title)}</strong>
                     <span>${esc(sub.artistName ? `${sub.artistName}${sub.country ? ", " + sub.country : ""}` : sub.publicId)}</span>
-                    <span class="mini-status">${chip}</span>
+                    <span class="a-status-chip">${chip}</span>
                   </span>
                 </button>
               </article>`;
           }).join("")}
         </div>
       </section>` : `
-      <section class="queue-preview">
-        <div class="section-title"><h2>Submission Queue</h2></div>
+      <section>
+        <div class="o-queue-section__header"><h2>Submission Queue</h2></div>
         ${lockedPanel("Posters are hidden", status === "open" ? "Submissions are still coming in. The queue is revealed when Round 1 opens." : "The queue is revealed when judging begins.")}
       </section>`}
     </section>`;
@@ -325,55 +317,43 @@ function roundOneMarkup() {
 
   return `
     <section class="portal-view is-active">
-      <div class="review-header">
+      <div class="o-review-header">
         <div>
-          <p class="eyebrow">Round 1</p>
+          <p class="a-section-tag">Round 1</p>
           <h1>Swipe Review</h1>
         </div>
-        <div class="review-tools">
-          <button class="ghost-button" type="button" data-prev-submission ${state.r1Index === 0 ? "disabled" : ""}>Previous</button>
+        <div class="m-review-nav">
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-prev-submission ${state.r1Index === 0 ? "disabled" : ""}>Previous</button>
           <strong>${state.r1Index + 1} of ${subs.length}</strong>
-          <button class="ghost-button" type="button" data-next-submission ${!canOpenRoundOne(state.r1Index + 1) ? "disabled" : ""}>Next</button>
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-next-submission ${!canOpenRoundOne(state.r1Index + 1) ? "disabled" : ""}>Next</button>
         </div>
       </div>
 
-      ${complete && votingOpen ? `<p class="workflow-note">All ${subs.length} decisions recorded — ${yesCount} Yes. You can revise them until the manager opens Round 2.</p>`
-        : votingOpen ? `<p class="workflow-note">Swipe left for No, right for Yes. Poster ${Math.max(0, subs.findIndex((s) => !myVote(s.id))) + 1} is next.</p>`
-        : `<p class="workflow-note">Round 1 voting is closed. Your recorded decisions are shown for reference.</p>`}
+      ${complete && votingOpen ? `<p class="a-workflow-note">All ${subs.length} decisions recorded — ${yesCount} Yes. You can revise them until the manager opens Round 2.</p>`
+        : votingOpen ? `<p class="a-workflow-note">Swipe left for No, right for Yes. Poster ${Math.max(0, subs.findIndex((s) => !myVote(s.id))) + 1} is next.</p>`
+        : `<p class="a-workflow-note">Round 1 voting is closed. Your recorded decisions are shown for reference.</p>`}
 
-      <div class="swipe-review">
-        <article class="swipe-card ${decision === "no" ? "swiped-left" : ""} ${decision === "yes" ? "swiped-right" : ""}" data-swipe-card>
-          <div class="poster-stage">${posterMedia(sub)}</div>
-          <div class="swipe-meta">
+      <div class="o-swipe-stage">
+        <article class="m-swipe-card ${decision === "no" ? "swiped-left" : ""} ${decision === "yes" ? "swiped-right" : ""}" data-swipe-card>
+          ${posterThumbTag(sub, "stage")}
+          <div class="m-swipe-card__meta">
             <h2>${esc(sub.title)}</h2>
-            ${sub.concept ? `<p class="swipe-concept">${esc(sub.concept)}</p>` : ""}
+            ${sub.concept ? `<p class="m-swipe-card__concept">${esc(sub.concept)}</p>` : ""}
           </div>
         </article>
 
         ${votingOpen ? `
-        <div class="swipe-actions" aria-label="Round 1 decision">
-          <button class="swipe-button reject" type="button" data-swipe-left>
-            <span>Swipe left</span>No<small>Not through</small>
+        <div class="o-swipe-actions" aria-label="Round 1 decision">
+          <button class="a-swipe-trigger" type="button" data-swipe-left>
+            <span>Swipe left</span>No
           </button>
-          <button class="swipe-button accept" type="button" data-swipe-right>
-            <span>Swipe right</span>Yes<small>Send to Round 2</small>
+          <button class="a-swipe-trigger" type="button" data-swipe-right>
+            <span>Swipe right</span>Yes
           </button>
         </div>` : ""}
       </div>
+      ${criteriaBarMarkup()}
     </section>`;
-}
-
-function starCategoryMarkup(criterion, selected) {
-  const stars = Array.from({ length: 10 }, (_, i) => {
-    const value = i + 1;
-    return `<button class="star-button ${value <= selected ? "is-selected" : ""}" type="button"
-      data-star-value="${value}" aria-label="${esc(criterion)} ${value} out of 10">${value <= selected ? "★" : "☆"}</button>`;
-  }).join("");
-  return `
-    <fieldset class="star-category" data-star-category="${esc(criterion)}" data-selected="${selected}">
-      <legend>${esc(criterion)}</legend>
-      <div class="star-buttons">${stars}</div>
-    </fieldset>`;
 }
 
 function roundTwoMarkup() {
@@ -404,48 +384,49 @@ function roundTwoMarkup() {
 
   return `
     <section class="portal-view is-active">
-      <div class="review-header">
+      <div class="o-review-header">
         <div>
-          <p class="eyebrow">Round 2</p>
+          <p class="a-section-tag">Round 2</p>
           <h1>Category Ratings</h1>
         </div>
-        <div class="review-tools">
-          <button class="ghost-button" type="button" data-round-two-prev ${state.r2Index === 0 ? "disabled" : ""}>Previous</button>
+        <div class="m-review-nav">
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-round-two-prev ${state.r2Index === 0 ? "disabled" : ""}>Previous</button>
           <strong>${state.r2Index + 1} of ${subs.length}</strong>
-          <button class="ghost-button" type="button" data-round-two-next ${state.r2Index === subs.length - 1 ? "disabled" : ""}>Next</button>
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-round-two-next ${state.r2Index === subs.length - 1 ? "disabled" : ""}>Next</button>
         </div>
       </div>
 
-      <article class="round-two-rating-panel">
-        <div class="poster-stage">${posterMedia(sub)}</div>
-        <form class="star-rating-form" data-round-two-form data-submission-id="${sub.id}">
-          <div class="submission-meta">
-            <span>${esc(sub.publicId)}</span>
+      <article class="o-rating-stage">
+        ${posterThumbTag(sub, "stage")}
+        <form class="o-review-form" data-round-two-form data-submission-id="${sub.id}">
+          <div class="m-submission-meta">
+            <span class="a-section-tag">${esc(sub.publicId)}</span>
             <h2>${esc(sub.title)}</h2>
             <p>${savedRatingComplete(sub.id) ? "Ratings submitted — you can revise them while Round 2 is open." : "Rate each category out of 10 stars."}</p>
           </div>
-          <div class="designer-context" aria-label="Designer and poster context">
+          <div class="o-designer-context" aria-label="Designer and poster context">
             <div>
-              <span class="context-kicker">Designer</span>
-              <div class="designer-summary">
+              <span class="a-context-kicker">Designer</span>
+              <div class="o-designer-summary">
                 <p><span>Name</span><strong>${esc(sub.artistName || "—")}</strong></p>
                 <p><span>Country</span><strong>${esc(sub.country || "—")}</strong></p>
                 ${metaRows.map(([label, value]) => `<p><span>${esc(label)}</span><strong>${esc(value)}</strong></p>`).join("")}
               </div>
             </div>
-            <div class="poster-description">
-              <span class="context-kicker">Poster concept</span>
+            <div class="o-poster-description">
+              <span class="a-context-kicker">Poster concept</span>
               <p>${esc(sub.concept || "No concept statement provided.")}</p>
             </div>
           </div>
-          <div class="star-category-list">
-            ${contest().criteria.map((crit) => starCategoryMarkup(crit, pending[crit] || 0)).join("")}
+          <div class="o-star-rating-list">
+            ${contest().criteria.map((crit) => `<ub-star-rating criterion="${esc(crit)}" value="${pending[crit] || 0}" max="10" ${ratingOpen ? "" : "readonly"}></ub-star-rating>`).join("")}
           </div>
           ${ratingOpen
-            ? `<button class="primary-button" type="submit">Submit ratings</button>`
-            : `<p class="workflow-note">Round 2 rating is closed.</p>`}
+            ? `<button class="a-action-trigger a-action-trigger--primary" type="submit">Submit ratings</button>`
+            : `<p class="a-workflow-note">Round 2 rating is closed.</p>`}
         </form>
       </article>
+      ${criteriaBarMarkup()}
     </section>`;
 }
 
@@ -454,14 +435,14 @@ function rankingRows() {
   return results.map((r, index) => {
     const sub = submissions().find((s) => s.id === r.submissionId) || { id: r.submissionId, title: r.title, fileUrl: null };
     return `
-      <article class="ranking-row">
-        <span>${String(index + 1).padStart(2, "0")}</span>
-        ${posterMedia(sub, "queue-thumb")}
+      <article class="m-ranking-row">
+        <span class="m-ranking-row__rank">${String(index + 1).padStart(2, "0")}</span>
+        ${posterThumbTag(sub, "queue")}
         <div>
           <strong>${esc(r.title)}</strong>
           <p>${esc([r.artistName, r.country].filter(Boolean).join(", ") || r.publicId)} · ${r.judgesRated} judge${r.judgesRated === 1 ? "" : "s"}</p>
         </div>
-        <strong class="ranking-score">${r.average.toFixed(1)}</strong>
+        <strong class="m-ranking-row__score">${r.average.toFixed(1)}</strong>
       </article>`;
   }).join("");
 }
@@ -472,12 +453,12 @@ function finalistsMarkup() {
   }
   return `
     <section class="portal-view is-active">
-      <div class="page-heading tight">
-        <p class="eyebrow">Finalists</p>
+      <div class="t-page-heading is-tight">
+        <p class="a-section-tag">Finalists</p>
         <h1>Finalist Ranking</h1>
         <p>Aggregated Round 2 ratings across the full judging panel.</p>
       </div>
-      <div class="ranking-list">${rankingRows() || lockedPanel("No ratings yet", "No Round 2 ratings have been submitted.")}</div>
+      <div class="o-ranking-list">${rankingRows() || lockedPanel("No ratings yet", "No Round 2 ratings have been submitted.")}</div>
     </section>`;
 }
 
@@ -487,18 +468,18 @@ function deliberationMarkup() {
   }
   return `
     <section class="portal-view is-active">
-      <div class="page-heading tight">
-        <p class="eyebrow">Deliberation</p>
+      <div class="t-page-heading is-tight">
+        <p class="a-section-tag">Deliberation</p>
         <h1>Meeting Hub</h1>
       </div>
-      <div class="meeting-grid">
-        <article class="meeting-card">
-          <span>${esc(contest().name)}</span>
+      <div class="o-meeting-grid">
+        <article>
+          <span class="a-section-tag">${esc(contest().name)}</span>
           <h2>Final Deliberation</h2>
           <p>The panel compares finalist rankings, rating variance, and flagged entries before winners are confirmed.</p>
         </article>
-        <article class="resource-card">
-          <h2>Resources</h2>
+        <article class="o-resource-list">
+          <span class="a-section-tag">Resources</span>
           <a href="#finalists" data-view-target="finalists">Finalist ranking</a>
           <a href="#round-one" data-view-target="round-one">Round 1 decisions</a>
           <a href="#dashboard" data-view-target="dashboard">Contest overview</a>
@@ -515,23 +496,23 @@ function resultsMarkup() {
   const ordinal = (n) => (n === 1 ? "1st" : n === 2 ? "2nd" : "3rd");
   return `
     <section class="portal-view is-active">
-      <div class="page-heading tight">
-        <p class="eyebrow">Results</p>
+      <div class="t-page-heading is-tight">
+        <p class="a-section-tag">Results</p>
         <h1>${contest().status === "complete" ? "Final Results" : "Provisional Results"}</h1>
         <p>Calculated from Round 2 category ratings across all judges.</p>
       </div>
-      <div class="winner-grid">
+      <div class="o-winner-grid">
         ${winners.map((r, index) => `
-          <article>
-            <span>${ordinal(index + 1)} Place</span>
+          <article class="m-winner-tile">
+            <span class="a-section-tag">${ordinal(index + 1)} Place</span>
             <strong>${esc(r.title)}</strong>
             <small>${esc([r.artistName, r.country].filter(Boolean).join(", ") || r.publicId)} · ${r.average.toFixed(1)}/10</small>
           </article>`).join("") || lockedPanel("No ratings", "No Round 2 ratings were submitted.")}
       </div>
-      <section class="archive-card">
+      <section>
         <h2>Calculated Ranking</h2>
-        <p>Ranked by the mean of every category score from every judge on the panel.</p>
-        <button class="ghost-button" type="button" data-view-target="finalists">View full ranking</button>
+        <p class="a-workflow-note">Ranked by the mean of every category score from every judge on the panel.</p>
+        <button class="a-action-trigger" type="button" data-view-target="finalists">View full ranking</button>
       </section>
     </section>`;
 }
@@ -551,8 +532,8 @@ function render() {
 
   app.innerHTML = `
     ${sidebarMarkup()}
-    <section class="portal-workspace">
-      ${state.notice ? `<div class="lock-notice">${esc(state.notice)}</div>` : ""}
+    <section class="t-workspace">
+      ${state.notice ? `<p class="a-workflow-note">${esc(state.notice)}</p>` : ""}
       ${viewMarkup()}
     </section>`;
   state.notice = null;
@@ -625,6 +606,18 @@ async function submitRatings(subId) {
   render();
 }
 
+document.addEventListener("ub-navigate", (event) => {
+  activateView(event.detail.view);
+});
+
+document.addEventListener("ub-rate", (event) => {
+  const form = event.target.closest("[data-round-two-form]");
+  if (!form) return;
+  const subId = Number(form.dataset.submissionId);
+  state.pendingRatings[subId] = state.pendingRatings[subId] || {};
+  state.pendingRatings[subId][event.detail.criterion] = event.detail.value;
+});
+
 document.addEventListener("click", (event) => {
   const viewButton = event.target.closest("[data-view-target]");
   if (viewButton) {
@@ -651,21 +644,6 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-swipe-right]")) { submitVote("yes"); return; }
   if (event.target.closest("[data-round-two-prev]")) { state.r2Index -= 1; render(); return; }
   if (event.target.closest("[data-round-two-next]")) { state.r2Index += 1; render(); return; }
-
-  const starButton = event.target.closest("[data-star-value]");
-  if (starButton) {
-    const fieldset = starButton.closest("[data-star-category]");
-    const form = starButton.closest("[data-round-two-form]");
-    const subId = Number(form.dataset.submissionId);
-    state.pendingRatings[subId] = state.pendingRatings[subId] || {};
-    state.pendingRatings[subId][fieldset.dataset.starCategory] = Number(starButton.dataset.starValue);
-    fieldset.dataset.selected = starButton.dataset.starValue;
-    fieldset.querySelectorAll("[data-star-value]").forEach((button) => {
-      const selected = Number(button.dataset.starValue) <= Number(starButton.dataset.starValue);
-      button.classList.toggle("is-selected", selected);
-      button.textContent = selected ? "★" : "☆";
-    });
-  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -699,7 +677,10 @@ async function init() {
   state.contests = res.body.contests;
 
   if (["admin", "manager"].includes(state.me.user.role)) {
-    document.querySelector("[data-staff-link]").hidden = false;
+    // Toggle the attribute (not the .hidden DOM property) so this works
+    // regardless of whether <ub-header-bar> has upgraded/rendered yet —
+    // attributeChangedCallback re-renders it either way.
+    document.querySelector("ub-header-bar")?.removeAttribute("other-hidden");
   }
   if (!state.contests.length) {
     return gate("No contests", "No active contests", state.me.user.role === "judge"

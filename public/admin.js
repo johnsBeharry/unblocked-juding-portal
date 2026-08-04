@@ -11,6 +11,8 @@ const state = {
   newKey: null,           // raw key shown once after creation
   notice: null,
   compose: null,          // { userId, userEmail, subject, body, mode, sending }
+  activeDrawer: null,     // "new-contest" | "add-judge" | "add-user" | "create-key" | null
+  confirmAction: null,    // { heading, message, confirmLabel, action } | null
 };
 
 const app = document.querySelector("[data-app]");
@@ -34,9 +36,9 @@ async function api(path, options = {}) {
 
 function gate(kicker, title, text) {
   app.innerHTML = `
-    <section class="portal-gate">
-      <article class="locked-panel">
-        <span>${esc(kicker)}</span>
+    <section class="o-portal-gate">
+      <article class="t-gate-panel">
+        <span class="a-section-tag">${esc(kicker)}</span>
         <h2>${esc(title)}</h2>
         <p>${esc(text)}</p>
       </article>
@@ -45,18 +47,60 @@ function gate(kicker, title, text) {
 
 function loginGate(message) {
   app.innerHTML = `
-    <section class="portal-gate">
-      <article class="locked-panel login-card">
-        <span>Sign in</span>
+    <section class="o-portal-gate">
+      <article class="t-gate-panel login-card">
+        <span class="a-section-tag">Sign in</span>
         <h2>UNBLOCKED Admin</h2>
         <p>${esc(message || "Enter your email and we'll send you a one-time sign-in link.")}</p>
-        <form class="login-form" data-login-form>
-          <input type="email" name="email" required placeholder="you@example.com" autocomplete="email">
-          <button class="primary-button" type="submit">Email me a sign-in link</button>
+        <form class="o-login-form" data-login-form>
+          <input class="a-input-text" type="email" name="email" required placeholder="you@example.com" autocomplete="email">
+          <button class="a-action-trigger a-action-trigger--primary" type="submit">Email me a sign-in link</button>
         </form>
       </article>
     </section>`;
 }
+
+/* ---------- confirm modal (replaces window.confirm) ---------- */
+
+function askConfirm({ heading, message, confirmLabel, action }) {
+  state.confirmAction = { heading, message, confirmLabel, action };
+  render();
+}
+
+function confirmModalMarkup() {
+  if (!state.confirmAction) return "";
+  const { heading, message, confirmLabel } = state.confirmAction;
+  return `<ub-warning-modal heading="${esc(heading)}" message="${esc(message)}"
+    ${confirmLabel ? `confirm-label="${esc(confirmLabel)}"` : ""}></ub-warning-modal>`;
+}
+
+document.addEventListener("ub-confirm", () => {
+  const pending = state.confirmAction;
+  state.confirmAction = null;
+  pending?.action();
+});
+
+document.addEventListener("ub-cancel", () => {
+  state.confirmAction = null;
+  render();
+});
+
+/* ---------- drawers ---------- */
+
+function drawerMarkup() {
+  switch (state.activeDrawer) {
+    case "new-contest": return newContestDrawerMarkup();
+    case "add-judge": return addJudgeDrawerMarkup();
+    case "add-user": return addUserDrawerMarkup();
+    case "create-key": return createKeyDrawerMarkup();
+    default: return "";
+  }
+}
+
+document.addEventListener("ub-drawer-close", () => {
+  state.activeDrawer = null;
+  render();
+});
 
 /* ---------- welcome-email compose modal ---------- */
 
@@ -122,37 +166,36 @@ function composeModalMarkup() {
   const cm = state.compose;
   if (!cm) return "";
   return `
-    <div class="portal-popup-backdrop" data-compose-backdrop>
-      <article class="portal-popup wide" role="dialog" aria-modal="true" aria-labelledby="compose-title">
-        <span>Welcome email</span>
-        <h2 id="compose-title">Send to ${esc(cm.userEmail)}</h2>
-        <p>Nothing sends until you click Send — edit as needed first.</p>
+    <div class="o-overlay-backdrop o-overlay-backdrop--fade-in" data-compose-backdrop></div>
+    <article class="t-modal-panel" role="dialog" aria-modal="true" aria-labelledby="compose-title">
+      <span class="a-section-tag">Welcome email</span>
+      <h2 id="compose-title">Send to ${esc(cm.userEmail)}</h2>
+      <p>Nothing sends until you click Send — edit as needed first.</p>
 
-        <label class="compose-field">Subject
-          <input type="text" data-compose-subject value="${esc(cm.subject)}" maxlength="200">
-        </label>
+      <label class="m-form-field">Subject
+        <input class="a-input-text" type="text" data-compose-subject value="${esc(cm.subject)}" maxlength="200">
+      </label>
 
-        <div class="compose-tabs">
-          <button type="button" class="${cm.mode === "edit" ? "is-active" : ""}" data-compose-mode="edit">Edit</button>
-          <button type="button" class="${cm.mode === "preview" ? "is-active" : ""}" data-compose-mode="preview">Preview</button>
-        </div>
+      <div class="o-compose-tabs">
+        <button type="button" class="${cm.mode === "edit" ? "is-active" : ""}" data-compose-mode="edit">Edit</button>
+        <button type="button" class="${cm.mode === "preview" ? "is-active" : ""}" data-compose-mode="preview">Preview</button>
+      </div>
 
-        ${cm.mode === "edit"
-          ? `<textarea class="compose-body" data-compose-body rows="10" maxlength="5000">${esc(cm.body)}</textarea>
-             <p class="workflow-note">Basic markdown: **bold**, [link text](https://…), and "- " bullet lists.</p>`
-          : `<div class="compose-preview">
-               <div class="compose-preview-frame">
-                 <p class="compose-preview-kicker">UNBLOCKED Judging</p>
-                 ${renderMarkdownPreview(cm.body)}
-               </div>
-             </div>`}
+      ${cm.mode === "edit"
+        ? `<textarea class="a-input-textarea" data-compose-body rows="10" maxlength="5000">${esc(cm.body)}</textarea>
+           <p class="a-workflow-note">Basic markdown: **bold**, [link text](https://…), and "- " bullet lists.</p>`
+        : `<div class="o-compose-preview">
+             <div class="o-compose-preview-frame">
+               <p class="o-compose-preview-kicker">UNBLOCKED Judging</p>
+               ${renderMarkdownPreview(cm.body)}
+             </div>
+           </div>`}
 
-        <div class="popup-actions">
-          <button class="ghost-button" type="button" data-compose-skip ${cm.sending ? "disabled" : ""}>Skip for now</button>
-          <button class="primary-button" type="button" data-compose-send ${cm.sending ? "disabled" : ""}>${cm.sending ? "Sending…" : "Send email"}</button>
-        </div>
-      </article>
-    </div>`;
+      <div class="o-compose-form-actions">
+        <button class="a-action-trigger a-action-trigger--dim" type="button" data-compose-skip ${cm.sending ? "disabled" : ""}>Skip for now</button>
+        <button class="a-action-trigger a-action-trigger--primary" type="button" data-compose-send ${cm.sending ? "disabled" : ""}>${cm.sending ? "Sending…" : "Send email"}</button>
+      </div>
+    </article>`;
 }
 
 const STATUS_FLOW = ["draft", "open", "round1", "round2", "deliberation", "complete", "archived"];
@@ -175,26 +218,29 @@ function sidebarMarkup() {
   const initials = (user.name || user.email)
     .split(/[\s@.]+/).filter(Boolean).slice(0, 2)
     .map((part) => part[0].toUpperCase()).join("");
-  const navButton = (view, label) =>
-    `<button type="button" data-admin-view="${view}" class="${state.view === view || (view === "contests" && state.view === "contest") ? "is-active" : ""}">${esc(label)}</button>`;
+
+  const navItem = (view, label) => {
+    const active = state.view === view || (view === "contests" && state.view === "contest");
+    return `<ub-nav-link view="${view}" label="${esc(label)}" ${active ? "active" : ""}></ub-nav-link>`;
+  };
 
   return `
-    <aside class="judge-sidebar" aria-label="Admin navigation">
-      <div class="judge-profile">
-        <span class="profile-mark">${esc(initials || "A")}</span>
+    <aside class="o-nav-sidebar" aria-label="Admin navigation">
+      <div class="m-profile-card">
+        <span class="m-profile-card__mark">${esc(initials || "A")}</span>
         <div>
-          <strong>${esc(user.name || user.email)}</strong>
-          <span>${esc(user.role === "admin" ? "Administrator" : "Contest Manager")}</span>
-          <button class="text-button signout-button" type="button" data-logout>Sign out</button>
+          <strong class="m-profile-card__name">${esc(user.name || user.email)}</strong>
+          <span class="m-profile-card__role">${esc(user.role === "admin" ? "Administrator" : "Contest Manager")}</span>
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-logout>Sign out</button>
         </div>
       </div>
-      <nav class="portal-nav">
-        ${navButton("contests", "Contests")}
-        ${isAdmin() ? navButton("users", "Users") : ""}
-        ${isAdmin() ? navButton("keys", "API Keys") : ""}
+      <nav class="o-portal-nav">
+        ${navItem("contests", "Contests")}
+        ${isAdmin() ? navItem("users", "Users") : ""}
+        ${isAdmin() ? navItem("keys", "API Keys") : ""}
       </nav>
-      <section class="sidebar-card">
-        <h2>Lifecycle</h2>
+      <section class="o-sidebar-list">
+        <span class="a-section-tag">Lifecycle</span>
         <ul>
           <li>Draft → set up contest</li>
           <li>Open → collect submissions</li>
@@ -208,51 +254,67 @@ function sidebarMarkup() {
 
 /* ---------- contests list ---------- */
 
+function newContestDrawerMarkup() {
+  return `
+    <ub-drawer heading="New Contest">
+      <form data-create-contest>
+        <label class="m-form-field">Name <input class="a-input-text" name="name" required maxlength="120" placeholder="Ownership 2026"></label>
+        <label class="m-form-field">Theme <input class="a-input-text" name="theme" maxlength="120" placeholder="Ownership"></label>
+        <label class="m-form-field is-wide">Description <textarea class="a-input-textarea" name="description" rows="3" maxlength="1000"></textarea></label>
+        <label class="m-form-field is-wide">Criteria (comma-separated)
+          <input class="a-input-text" name="criteria" value="Theme Relevance, Concept, Execution, Creativity">
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">(+) Create Contest</button>
+      </form>
+    </ub-drawer>`;
+}
+
 function contestsMarkup() {
   return `
     <section class="portal-view is-active">
-      <div class="page-heading">
-        <p class="eyebrow">Admin Console</p>
+      <div class="t-page-heading">
+        <p class="a-section-tag">Admin Console</p>
         <h1>Contests</h1>
         <p>Each contest runs its own judging panel with the shared scoring system.</p>
       </div>
 
-      <div class="admin-grid">
+      <div class="o-contest-list">
         ${state.contests.map((ct) => `
-          <article class="status-card admin-contest-card">
-            <span>${esc(STATUS_LABELS[ct.status] || ct.status)}</span>
-            <strong>${esc(ct.name)}</strong>
-            <p>${ct.submission_count} submission${ct.submission_count === 1 ? "" : "s"} · ${ct.judge_count} judge${ct.judge_count === 1 ? "" : "s"} · <code>${esc(ct.slug)}</code></p>
-            <button class="ghost-button" type="button" data-open-contest="${ct.id}">Manage</button>
-          </article>`).join("") || `<p class="workflow-note">No contests yet — create the first one below.</p>`}
+          <article class="m-contest-row">
+            <div>
+              <span class="a-section-tag">${esc(STATUS_LABELS[ct.status] || ct.status)}</span>
+              <strong>${esc(ct.name)}</strong>
+              <p class="m-contest-row__meta">${ct.submission_count} submission${ct.submission_count === 1 ? "" : "s"} · ${ct.judge_count} judge${ct.judge_count === 1 ? "" : "s"} · <code>${esc(ct.slug)}</code></p>
+            </div>
+            <button class="a-action-trigger" type="button" data-open-contest="${ct.id}">(Manage)</button>
+          </article>`).join("") || `<p class="a-workflow-note">No contests yet — create the first one below.</p>`}
       </div>
 
-      <section class="archive-card">
-        <h2>New Contest</h2>
-        <form class="admin-form" data-create-contest>
-          <label>Name <input name="name" required maxlength="120" placeholder="Ownership 2026"></label>
-          <label>Theme <input name="theme" maxlength="120" placeholder="Ownership"></label>
-          <label class="wide">Description <textarea name="description" rows="2" maxlength="1000"></textarea></label>
-          <label class="wide">Criteria (comma-separated)
-            <input name="criteria" value="Theme Relevance, Concept, Execution, Creativity">
-          </label>
-          <button class="primary-button" type="submit">Create contest</button>
-        </form>
-      </section>
+      <button class="a-action-trigger" type="button" data-open-drawer="new-contest">(+) New Contest</button>
     </section>`;
 }
 
 /* ---------- contest detail ---------- */
 
-function statusStepper(ct) {
+function stageNavInteractiveMarkup(ct) {
   return `
-    <div class="status-stepper">
-      ${STATUS_FLOW.map((status) => `
-        <button type="button" class="step ${ct.status === status ? "is-current" : ""}"
-          data-set-status="${status}" ${ct.status === status ? "disabled" : ""}>
-          ${esc(STATUS_LABELS[status])}
-        </button>`).join("")}
-    </div>`;
+    <nav class="o-stage-nav" aria-label="Contest stage">
+      ${STATUS_FLOW.map((status) => `<button type="button"
+        class="o-stage-nav__item o-stage-nav__item--clickable${ct.status === status ? " o-stage-nav__item--active" : ""}"
+        data-set-status="${status}" ${ct.status === status ? "disabled" : ""}>${esc(STATUS_LABELS[status])}</button>`).join("")}
+    </nav>`;
+}
+
+function addJudgeDrawerMarkup() {
+  return `
+    <ub-drawer heading="Add Judge to Panel">
+      <form data-add-judge>
+        <label class="m-form-field">Email <input class="a-input-text" name="email" type="email" required placeholder="judge@example.com"></label>
+        <label class="m-form-field">Name <input class="a-input-text" name="name" maxlength="120" placeholder="Optional"></label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">(+) Add Judge to Panel</button>
+      </form>
+      <p class="a-workflow-note">Judges sign in with this email via a one-time emailed link — no password setup needed. Adding a judge prompts a welcome email you can edit before sending.</p>
+    </ub-drawer>`;
 }
 
 function contestDetailMarkup() {
@@ -263,15 +325,15 @@ function contestDetailMarkup() {
   const submissionRows = d.submissions.map((sub) => {
     const thumb = sub.fileUrl && (sub.file_type || "").startsWith("image/")
       ? `<img src="${esc(sub.fileUrl)}" alt="" loading="lazy">`
-      : `<span class="thumb-fallback">${esc((sub.file_type || "—").split("/")[1] || "—")}</span>`;
+      : `<span class="a-thumb-fallback">${esc((sub.file_type || "—").split("/")[1] || "—")}</span>`;
     return `
       <tr class="${sub.status === "disqualified" ? "is-disqualified" : ""}">
         <td class="cell-thumb">${sub.fileUrl ? `<a href="${esc(sub.fileUrl)}" target="_blank" rel="noopener">${thumb}</a>` : thumb}</td>
         <td><strong>${esc(sub.title)}</strong><br><small>${esc(sub.public_id)} · ${esc([sub.artist_name, sub.country].filter(Boolean).join(", ") || "anonymous")}</small></td>
         <td>${sub.yes_votes} yes / ${sub.no_votes} no</td>
         <td>${sub.ratings_count}</td>
-        <td><label class="check-label"><input type="checkbox" data-advance-check value="${sub.id}" ${sub.advanced ? "checked" : ""} ${sub.status === "disqualified" ? "disabled" : ""}> R2</label></td>
-        <td><button class="text-button" type="button" data-toggle-dq="${sub.id}" data-current="${sub.status}">
+        <td><label class="a-check-label"><input type="checkbox" data-advance-check value="${sub.id}" ${sub.advanced ? "checked" : ""} ${sub.status === "disqualified" ? "disabled" : ""}> R2</label></td>
+        <td><button class="a-action-trigger a-action-trigger--dim" type="button" data-toggle-dq="${sub.id}" data-current="${sub.status}">
           ${sub.status === "disqualified" ? "Reinstate" : "Disqualify"}</button></td>
       </tr>`;
   }).join("");
@@ -286,68 +348,65 @@ function contestDetailMarkup() {
 
   return `
     <section class="portal-view is-active">
-      <div class="review-header">
+      <div class="o-review-header">
         <div>
-          <p class="eyebrow">Contest</p>
+          <p class="a-section-tag">Contest</p>
           <h1>${esc(ct.name)}</h1>
         </div>
-        <div class="review-tools">
-          <button class="ghost-button" type="button" data-admin-view="contests">Back to contests</button>
-          <a class="ghost-button" href="/api/admin/contests/${ct.id}/export.csv">Export CSV</a>
+        <div class="m-review-nav">
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-admin-view="contests">Back to contests</button>
+          <a class="a-action-trigger" href="/api/admin/contests/${ct.id}/export.csv">Export CSV</a>
         </div>
       </div>
 
-      <section class="archive-card">
+      <section class="o-section">
         <h2>Status</h2>
         <p>Slug <code>${esc(ct.slug)}</code> — the external form submits to <code>/api/v1/contests/${esc(ct.slug)}/submissions</code>.</p>
-        ${statusStepper(ct)}
-        <p class="workflow-note">Moving to Round 2 requires at least one advanced submission. Judges only ever see the active stage.</p>
+        ${stageNavInteractiveMarkup(ct)}
+        <p class="a-workflow-note">Moving to Round 2 requires at least one advanced submission. Judges only ever see the active stage.</p>
       </section>
 
-      <section class="archive-card">
+      <section class="o-section">
         <h2>Judging Panel (${d.judges.length})</h2>
-        <table class="admin-table">
-          <thead><tr><th>Judge</th><th>Round 1</th><th>Round 2</th><th>Welcome email</th><th></th></tr></thead>
-          <tbody>
-            ${d.judges.map((j) => `
-              <tr>
-                <td><strong>${esc(j.name || j.email)}</strong><br><small>${esc(j.email)}</small></td>
-                <td>${j.round1_votes} votes</td>
-                <td>${j.round2_ratings} rated</td>
-                <td>
-                  ${j.invite_sent_at ? `<span class="mini-status">Sent ${esc(j.invite_sent_at)}</span><br>` : ""}
-                  <button class="text-button" type="button" data-send-judge-invite="${j.id}">${j.invite_sent_at ? "Resend" : "Send invite"}</button>
-                </td>
-                <td><button class="text-button" type="button" data-remove-judge="${j.id}">Remove</button></td>
-              </tr>`).join("") || `<tr><td colspan="5">No judges on the panel yet.</td></tr>`}
-          </tbody>
-        </table>
-        <form class="admin-form inline" data-add-judge>
-          <label>Email <input name="email" type="email" required placeholder="judge@example.com"></label>
-          <label>Name <input name="name" maxlength="120" placeholder="Optional"></label>
-          <button class="primary-button" type="submit">Add judge</button>
-        </form>
-        <p class="workflow-note">Judges sign in with this email via a one-time emailed link — no password setup needed. Adding a judge prompts a welcome email you can edit before sending.</p>
+        <div class="o-table-scroll">
+          <table class="o-data-table">
+            <thead><tr><th>Judge</th><th>Round 1</th><th>Round 2</th><th>Welcome email</th><th></th></tr></thead>
+            <tbody>
+              ${d.judges.map((j) => `
+                <tr>
+                  <td><strong>${esc(j.name || j.email)}</strong><br><small>${esc(j.email)}</small></td>
+                  <td>${j.round1_votes} votes</td>
+                  <td>${j.round2_ratings} rated</td>
+                  <td>
+                    ${j.invite_sent_at ? `<span class="a-status-chip">Sent ${esc(j.invite_sent_at)}</span><br>` : ""}
+                    <button class="a-action-trigger a-action-trigger--dim" type="button" data-send-judge-invite="${j.id}">${j.invite_sent_at ? "Resend" : "Send invite"}</button>
+                  </td>
+                  <td><button class="a-action-trigger a-action-trigger--danger" type="button" data-remove-judge="${j.id}">Remove</button></td>
+                </tr>`).join("") || `<tr><td colspan="5">No judges on the panel yet.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        <button class="a-action-trigger" type="button" data-open-drawer="add-judge">(+) Add Judge to Panel</button>
       </section>
 
-      <section class="archive-card">
+      <section class="o-section">
         <h2>Submissions (${d.submissions.length})</h2>
-        <div class="table-scroll">
-          <table class="admin-table">
+        <div class="o-table-scroll">
+          <table class="o-data-table">
             <thead><tr><th></th><th>Entry</th><th>Round 1 votes</th><th>Ratings</th><th>Advance</th><th></th></tr></thead>
             <tbody>${submissionRows || `<tr><td colspan="6">No submissions yet — entries arrive via the external form API.</td></tr>`}</tbody>
           </table>
         </div>
-        <div class="form-actions">
-          <button class="ghost-button" type="button" data-preselect-majority>Preselect majority (≥ ${majority} yes)</button>
-          <button class="primary-button" type="button" data-save-advance>Save Round 2 selection</button>
+        <div class="o-compose-form-actions">
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-preselect-majority>Preselect majority (≥ ${majority} yes)</button>
+          <button class="a-action-trigger a-action-trigger--primary" type="button" data-save-advance>Save Round 2 selection</button>
         </div>
       </section>
 
-      <section class="archive-card">
+      <section class="o-section">
         <h2>Results</h2>
-        <div class="table-scroll">
-          <table class="admin-table">
+        <div class="o-table-scroll">
+          <table class="o-data-table">
             <thead><tr><th>#</th><th>Entry</th><th>Average</th><th>Judges</th></tr></thead>
             <tbody>${resultRows || `<tr><td colspan="4">No Round 2 ratings yet.</td></tr>`}</tbody>
           </table>
@@ -358,86 +417,104 @@ function contestDetailMarkup() {
 
 /* ---------- users + keys ---------- */
 
+function addUserDrawerMarkup() {
+  return `
+    <ub-drawer heading="Add User">
+      <form data-add-user>
+        <label class="m-form-field">Email <input class="a-input-text" name="email" type="email" required></label>
+        <label class="m-form-field">Name <input class="a-input-text" name="name" maxlength="120"></label>
+        <label class="m-form-field">Role
+          <select class="a-input-select" name="role">
+            <option value="judge">Judge</option>
+            <option value="manager">Manager</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">(+) Add / Update User</button>
+      </form>
+    </ub-drawer>`;
+}
+
 function usersMarkup() {
   return `
     <section class="portal-view is-active">
-      <div class="page-heading">
-        <p class="eyebrow">Admin Console</p>
+      <div class="t-page-heading">
+        <p class="a-section-tag">Admin Console</p>
         <h1>Users</h1>
         <p>Anyone signing in must exist here (or be listed in ADMIN_EMAILS) to receive a sign-in link.</p>
       </div>
-      <section class="archive-card">
-        <table class="admin-table">
-          <thead><tr><th>User</th><th>Role</th><th>Last seen</th><th>Welcome email</th></tr></thead>
-          <tbody>
-            ${state.users.map((u) => `
-              <tr>
-                <td><strong>${esc(u.name || u.email)}</strong><br><small>${esc(u.email)}</small></td>
-                <td>${esc(u.role)}</td>
-                <td>${esc(u.last_seen_at || "never")}</td>
-                <td>
-                  ${u.invite_sent_at ? `<span class="mini-status">Sent ${esc(u.invite_sent_at)}</span><br>` : ""}
-                  <button class="text-button" type="button" data-send-invite="${u.id}">${u.invite_sent_at ? "Resend" : "Send invite"}</button>
-                </td>
-              </tr>`).join("")}
-          </tbody>
-        </table>
-        <form class="admin-form inline" data-add-user>
-          <label>Email <input name="email" type="email" required></label>
-          <label>Name <input name="name" maxlength="120"></label>
-          <label>Role
-            <select name="role">
-              <option value="judge">Judge</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <button class="primary-button" type="submit">Add / update user</button>
-        </form>
+      <section class="o-section">
+        <div class="o-table-scroll">
+          <table class="o-data-table">
+            <thead><tr><th>User</th><th>Role</th><th>Last seen</th><th>Welcome email</th></tr></thead>
+            <tbody>
+              ${state.users.map((u) => `
+                <tr>
+                  <td><strong>${esc(u.name || u.email)}</strong><br><small>${esc(u.email)}</small></td>
+                  <td>${esc(u.role)}</td>
+                  <td>${esc(u.last_seen_at || "never")}</td>
+                  <td>
+                    ${u.invite_sent_at ? `<span class="a-status-chip">Sent ${esc(u.invite_sent_at)}</span><br>` : ""}
+                    <button class="a-action-trigger a-action-trigger--dim" type="button" data-send-invite="${u.id}">${u.invite_sent_at ? "Resend" : "Send invite"}</button>
+                  </td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <button class="a-action-trigger" type="button" data-open-drawer="add-user">(+) Add User</button>
       </section>
     </section>`;
+}
+
+function createKeyDrawerMarkup() {
+  return `
+    <ub-drawer heading="Create API Key">
+      <form data-create-key>
+        <label class="m-form-field">Name <input class="a-input-text" name="name" required maxlength="120" placeholder="External submission form"></label>
+        <label class="m-form-field">Contest scope
+          <select class="a-input-select" name="contestId">
+            <option value="">All contests</option>
+            ${state.contests.map((ct) => `<option value="${ct.id}">${esc(ct.name)}</option>`).join("")}
+          </select>
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">(+) Create Key</button>
+      </form>
+    </ub-drawer>`;
 }
 
 function keysMarkup() {
   return `
     <section class="portal-view is-active">
-      <div class="page-heading">
-        <p class="eyebrow">Admin Console</p>
+      <div class="t-page-heading">
+        <p class="a-section-tag">Admin Console</p>
         <h1>API Keys</h1>
         <p>Keys authenticate the external submission system. See docs/external-api.md in the repo.</p>
       </div>
 
       ${state.newKey ? `
-      <section class="archive-card key-reveal">
+      <section class="o-section">
         <h2>Copy this key now</h2>
         <p>It is shown once and stored only as a hash:</p>
-        <code class="key-value">${esc(state.newKey)}</code>
+        <code class="a-key-value">${esc(state.newKey)}</code>
       </section>` : ""}
 
-      <section class="archive-card">
-        <table class="admin-table">
-          <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Status</th><th></th></tr></thead>
-          <tbody>
-            ${state.keys.map((k) => `
-              <tr>
-                <td>${esc(k.name)}</td>
-                <td>${esc(k.contest_slug || "All contests")}</td>
-                <td>${esc(k.created_at)}</td>
-                <td>${k.revoked_at ? "Revoked" : "Active"}</td>
-                <td>${k.revoked_at ? "" : `<button class="text-button" type="button" data-revoke-key="${k.id}">Revoke</button>`}</td>
-              </tr>`).join("") || `<tr><td colspan="5">No API keys yet.</td></tr>`}
-          </tbody>
-        </table>
-        <form class="admin-form inline" data-create-key>
-          <label>Name <input name="name" required maxlength="120" placeholder="External submission form"></label>
-          <label>Contest scope
-            <select name="contestId">
-              <option value="">All contests</option>
-              ${state.contests.map((ct) => `<option value="${ct.id}">${esc(ct.name)}</option>`).join("")}
-            </select>
-          </label>
-          <button class="primary-button" type="submit">Create key</button>
-        </form>
+      <section class="o-section">
+        <div class="o-table-scroll">
+          <table class="o-data-table">
+            <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              ${state.keys.map((k) => `
+                <tr>
+                  <td>${esc(k.name)}</td>
+                  <td>${esc(k.contest_slug || "All contests")}</td>
+                  <td>${esc(k.created_at)}</td>
+                  <td>${k.revoked_at ? "(Revoked)" : "(Active)"}</td>
+                  <td>${k.revoked_at ? "" : `<button class="a-action-trigger a-action-trigger--danger" type="button" data-revoke-key="${k.id}">Revoke</button>`}</td>
+                </tr>`).join("") || `<tr><td colspan="5">No API keys yet.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        <button class="a-action-trigger" type="button" data-open-drawer="create-key">(+) Create API Key</button>
       </section>
     </section>`;
 }
@@ -453,10 +530,12 @@ function render() {
   };
   app.innerHTML = `
     ${sidebarMarkup()}
-    <section class="portal-workspace">
-      ${state.notice ? `<div class="lock-notice">${esc(state.notice)}</div>` : ""}
+    <section class="t-workspace">
+      ${state.notice ? `<p class="a-workflow-note">${esc(state.notice)}</p>` : ""}
       ${views[state.view]()}
     </section>
+    ${drawerMarkup()}
+    ${confirmModalMarkup()}
     ${composeModalMarkup()}`;
   state.notice = null;
 }
@@ -495,7 +574,18 @@ async function switchView(view) {
 
 /* ---------- events ---------- */
 
+document.addEventListener("ub-navigate", (event) => {
+  switchView(event.detail.view);
+});
+
 document.addEventListener("click", async (event) => {
+  const openDrawerButton = event.target.closest("[data-open-drawer]");
+  if (openDrawerButton) {
+    state.activeDrawer = openDrawerButton.dataset.openDrawer;
+    render();
+    return;
+  }
+
   const viewButton = event.target.closest("[data-admin-view]");
   if (viewButton) { switchView(viewButton.dataset.adminView); return; }
 
@@ -506,33 +596,56 @@ document.addEventListener("click", async (event) => {
   if (statusButton) {
     const status = statusButton.dataset.setStatus;
     const ct = state.contestDetail.contest;
-    if (!confirm(`Move "${ct.name}" to ${STATUS_LABELS[status]}?`)) return;
-    const res = await api(`/admin/contests/${ct.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    if (!res.ok) {
-      state.notice = res.body?.error === "no_advanced_submissions"
-        ? "Select and save a Round 2 set before opening Round 2."
-        : "Status change failed.";
-      return render();
-    }
-    return openContest(ct.id);
+    askConfirm({
+      heading: `Move to ${STATUS_LABELS[status]}?`,
+      message: `This changes what "${ct.name}" shows to its judging panel.`,
+      confirmLabel: "( Confirm Stage Transition )",
+      action: async () => {
+        const res = await api(`/admin/contests/${ct.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+        if (!res.ok) {
+          state.notice = res.body?.error === "no_advanced_submissions"
+            ? "Select and save a Round 2 set before opening Round 2."
+            : "Status change failed.";
+          return render();
+        }
+        return openContest(ct.id);
+      },
+    });
+    return;
   }
 
   const removeJudge = event.target.closest("[data-remove-judge]");
   if (removeJudge) {
     const ct = state.contestDetail.contest;
-    if (!confirm("Remove this judge from the panel? Their existing votes are kept.")) return;
-    await api(`/admin/contests/${ct.id}/judges/${removeJudge.dataset.removeJudge}`, { method: "DELETE" });
-    return openContest(ct.id);
+    askConfirm({
+      heading: "Remove this judge?",
+      message: "Their existing votes and ratings are kept, but they lose access to this contest's panel.",
+      confirmLabel: "( Confirm Remove )",
+      action: async () => {
+        await api(`/admin/contests/${ct.id}/judges/${removeJudge.dataset.removeJudge}`, { method: "DELETE" });
+        return openContest(ct.id);
+      },
+    });
+    return;
   }
 
   const toggleDq = event.target.closest("[data-toggle-dq]");
   if (toggleDq) {
-    const next = toggleDq.dataset.current === "disqualified" ? "submitted" : "disqualified";
-    await api(`/admin/submissions/${toggleDq.dataset.toggleDq}/status`, {
-      method: "POST",
-      body: JSON.stringify({ status: next }),
+    const disqualifying = toggleDq.dataset.current !== "disqualified";
+    const next = disqualifying ? "disqualified" : "submitted";
+    const subId = toggleDq.dataset.toggleDq;
+    askConfirm({
+      heading: disqualifying ? "Disqualify this submission?" : "Reinstate this submission?",
+      message: disqualifying
+        ? "It's excluded from Round 1/Round 2 selection and results until reinstated."
+        : "It becomes eligible for Round 1/Round 2 selection and results again.",
+      confirmLabel: disqualifying ? "( Confirm Disqualify )" : "( Confirm Reinstate )",
+      action: async () => {
+        await api(`/admin/submissions/${subId}/status`, { method: "POST", body: JSON.stringify({ status: next }) });
+        return openContest(state.contestDetail.contest.id);
+      },
     });
-    return openContest(state.contestDetail.contest.id);
+    return;
   }
 
   if (event.target.closest("[data-preselect-majority]")) {
@@ -562,9 +675,16 @@ document.addEventListener("click", async (event) => {
 
   const revoke = event.target.closest("[data-revoke-key]");
   if (revoke) {
-    if (!confirm("Revoke this API key? The external form using it will stop working.")) return;
-    await api(`/admin/keys/${revoke.dataset.revokeKey}`, { method: "DELETE" });
-    return switchView("keys");
+    askConfirm({
+      heading: "Revoke this API key?",
+      message: "The external form using it will stop working immediately.",
+      confirmLabel: "( Confirm Revoke )",
+      action: async () => {
+        await api(`/admin/keys/${revoke.dataset.revokeKey}`, { method: "DELETE" });
+        return switchView("keys");
+      },
+    });
+    return;
   }
 
   const sendJudgeInvite = event.target.closest("[data-send-judge-invite]");
@@ -645,6 +765,7 @@ document.addEventListener("submit", async (event) => {
       state.notice = res.body?.error === "slug_taken" ? "A contest with that name/slug already exists." : "Couldn't create the contest.";
       return render();
     }
+    state.activeDrawer = null;
     return openContest(res.body.contest.id);
   }
 
@@ -661,6 +782,7 @@ document.addEventListener("submit", async (event) => {
       state.notice = "Couldn't add that judge.";
       return render();
     }
+    state.activeDrawer = null;
     await openContest(ct.id);
     if (!res.body.inviteSent) openCompose(res.body.user, judgeInviteDraft(res.body.user, ct.name));
     return;
@@ -678,6 +800,7 @@ document.addEventListener("submit", async (event) => {
       state.notice = "Couldn't save that user.";
       return render();
     }
+    state.activeDrawer = null;
     await switchView("users");
     if (!res.body.inviteSent) openCompose(res.body.user, accountInviteDraft(res.body.user));
     return;
@@ -696,6 +819,7 @@ document.addEventListener("submit", async (event) => {
     });
     if (res.ok) state.newKey = res.body.key;
     else state.notice = "Couldn't create the key.";
+    state.activeDrawer = null;
     return switchView("keys");
   }
 });
