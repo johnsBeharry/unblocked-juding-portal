@@ -7,17 +7,14 @@ export function escapeHtml(value: string): string {
   })[ch] as string);
 }
 
-const LINK_COLOR = "#2850fe";
-const HIGHLIGHT_BG = "#fff3a0";
-
 function inline(text: string): string {
   let out = escapeHtml(text);
   out = out.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
-    `<a href="$2" style="color:${LINK_COLOR};text-decoration:underline">$1</a>`,
+    `<a href="$2">$1</a>`,
   );
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/==([^=]+)==/g, `<mark style="background:${HIGHLIGHT_BG};padding:0 2px">$1</mark>`);
+  out = out.replace(/==([^=]+)==/g, "<mark>$1</mark>");
   return out;
 }
 
@@ -25,7 +22,8 @@ function inline(text: string): string {
  * Minimal markdown -> HTML for email bodies: paragraphs, `**bold**`,
  * `==highlight==`, `[text](url)` links (http/https/mailto only), and `- `
  * bullet lists. No raw HTML passthrough — everything is escaped before
- * formatting.
+ * formatting. No inline styling — relies entirely on the email client's
+ * own defaults so it reads as a plain note, not a designed HTML email.
  */
 export function renderMarkdown(source: string): string {
   const blocks = source.trim().split(/\n\s*\n/).filter(Boolean);
@@ -33,33 +31,32 @@ export function renderMarkdown(source: string): string {
     .map((block) => {
       const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
       if (lines.length && lines.every((l) => l.startsWith("- "))) {
-        const items = lines.map((l) => `<li style="margin:0 0 6px">${inline(l.slice(2))}</li>`).join("");
-        return `<ul style="margin:0 0 16px;padding-left:20px">${items}</ul>`;
+        const items = lines.map((l) => `<li>${inline(l.slice(2))}</li>`).join("");
+        return `<ul>${items}</ul>`;
       }
-      return `<p style="margin:0 0 16px">${lines.map(inline).join("<br>")}</p>`;
+      return `<p>${lines.map(inline).join("<br>")}</p>`;
     })
     .join("");
 }
 
 /**
- * Wraps rendered body HTML in a plain, personal-feeling email shell: white
- * background, left-aligned, no card/banner/branding — reads like a note
- * from a person, not a system. Always signs off "Bests, Johns"; pass
- * `unsubscribeUrl` to add the one-click unsubscribe line (omit it for
- * emails a recipient can't function without, like the sign-in link).
+ * Wraps rendered body HTML with zero styling — no background, no colors,
+ * no fonts, no card. Just bare tags so it renders using whatever the
+ * recipient's mail client shows by default, like a plain note from a
+ * person. Always signs off "Bests, Johns"; pass `unsubscribeUrl` to add
+ * the one-click unsubscribe line (omit it for emails a recipient can't
+ * function without, like the sign-in link).
  */
 export function emailShell(bodyHtml: string, opts: { unsubscribeUrl?: string } = {}): string {
   const unsubscribe = opts.unsubscribeUrl
-    ? `<p style="margin:20px 0 0;font-size:12px;color:#9a9a9a;"><a href="${opts.unsubscribeUrl}" style="color:#9a9a9a;text-decoration:underline">Unsubscribe</a></p>`
+    ? `<p><a href="${opts.unsubscribeUrl}">Unsubscribe</a></p>`
     : "";
   return `<!doctype html>
 <html>
-  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,Inter,Arial,Helvetica,sans-serif;">
-    <div style="max-width:520px;margin:0;padding:40px 24px;color:#101010;font-size:16px;line-height:1.65;text-align:left;">
-      ${bodyHtml}
-      <p style="margin:32px 0 0">Bests,<br>Johns</p>
-      ${unsubscribe}
-    </div>
+  <body>
+    ${bodyHtml}
+    <p>Bests,<br>Johns</p>
+    ${unsubscribe}
   </body>
 </html>`;
 }

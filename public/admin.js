@@ -109,20 +109,20 @@ function renderMarkdownPreview(source) {
     let out = esc(text);
     out = out.replace(
       /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
-      '<a href="$2" style="color:#2850fe;text-decoration:underline">$1</a>',
+      '<a href="$2">$1</a>',
     );
     out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    out = out.replace(/==([^=]+)==/g, '<mark style="background:#fff3a0;padding:0 2px">$1</mark>');
+    out = out.replace(/==([^=]+)==/g, "<mark>$1</mark>");
     return out;
   };
   const blocks = source.trim().split(/\n\s*\n/).filter(Boolean);
   return blocks.map((block) => {
     const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length && lines.every((l) => l.startsWith("- "))) {
-      const items = lines.map((l) => `<li style="margin:0 0 6px">${inlineMd(l.slice(2))}</li>`).join("");
-      return `<ul style="margin:0 0 16px;padding-left:20px">${items}</ul>`;
+      const items = lines.map((l) => `<li>${inlineMd(l.slice(2))}</li>`).join("");
+      return `<ul>${items}</ul>`;
     }
-    return `<p style="margin:0 0 16px">${lines.map(inlineMd).join("<br>")}</p>`;
+    return `<p>${lines.map(inlineMd).join("<br>")}</p>`;
   }).join("");
 }
 
@@ -188,7 +188,7 @@ function composeModalMarkup() {
         : `<div class="o-compose-preview">
              <div class="o-compose-preview-frame">
                ${renderMarkdownPreview(cm.body)}
-               <p style="margin:32px 0 0">Bests,<br>Johns</p>
+               <p>Bests,<br>Johns</p>
              </div>
            </div>`}
 
