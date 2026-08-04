@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AppEnv } from "../types";
 import { SESSION_COOKIE, adminEmails, csrfGuard } from "../auth";
-import { emailShell, escapeHtml, sendEmail } from "../email";
+import { emailShell, escapeHtml, sendEmail, verifyUnsubscribeToken } from "../email";
 import { randomToken, sha256Hex } from "../util";
 
 /**
@@ -28,12 +28,13 @@ const LINK_TTL_MINUTES = 15;
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const MAX_LINKS_PER_WINDOW = 3;
 
-function loginEmail(link: string): string {
+function loginEmail(name: string, link: string): string {
   return emailShell(`
-    <p style="margin:0 0 16px">Click below to sign in to the UNBLOCKED judging portal. This link works once and expires in ${LINK_TTL_MINUTES} minutes.</p>
-    <p style="margin:0 0 20px"><a href="${link}" style="color:#2850fe;text-decoration:underline">Sign in to UNBLOCKED Judging</a></p>
-    <p style="margin:0 0 16px;font-size:13px;color:#767676">Or paste this link into your browser:<br>${link}</p>
-    <p style="margin:0;font-size:13px;color:#767676">If you didn't request this, you can ignore this email.</p>`);
+    <p style="margin:0 0 16px">Hey ${escapeHtml(name)},</p>
+    <p style="margin:0 0 16px">Here's your one-time link to sign in to the judging portal. It works once and expires in ${LINK_TTL_MINUTES} minutes.</p>
+    <p style="margin:0 0 20px">→ <a href="${link}" style="color:#2850fe;text-decoration:underline">Sign in to UNBLOCKED Judging</a></p>
+    <p style="margin:0 0 16px;font-size:13px;color:#767676">If that doesn't work, paste this into your browser:<br>${link}</p>
+    <p style="margin:0;font-size:13px;color:#767676">Didn't request this? Just ignore it.</p>`);
 }
 
 auth.post("/api/auth/request-link", async (c) => {
@@ -41,13 +42,15 @@ auth.post("/api/auth/request-link", async (c) => {
   const email = String(body?.email || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return c.json({ error: "invalid_email" }, 400);
 
-  let user = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+  let user = await c.env.DB.prepare("SELECT id, name FROM users WHERE email = ?")
+    .bind(email)
+    .first<{ id: number; name: string }>();
   if (!user && adminEmails(c.env.ADMIN_EMAILS).includes(email)) {
     user = await c.env.DB.prepare(
-      "INSERT INTO users (email, name, role) VALUES (?, ?, 'admin') RETURNING id",
+      "INSERT INTO users (email, name, role) VALUES (?, ?, 'admin') RETURNING id, name",
     )
       .bind(email, email.split("@")[0])
-      .first();
+      .first<{ id: number; name: string }>();
   }
   // Uninvited emails get the same response as invited ones — just no email.
   if (!user) return c.json({ ok: true });
@@ -69,10 +72,11 @@ auth.post("/api/auth/request-link", async (c) => {
     .run();
 
   const link = `${new URL(c.req.url).origin}/auth/callback?token=${rawToken}`;
+  const name = user!.name || email.split("@")[0];
   const sent = await sendEmail(c.env, {
     to: email,
-    subject: "Your UNBLOCKED judging sign-in link",
-    html: loginEmail(link),
+    subject: "Your sign-in link",
+    html: loginEmail(name, link),
   });
   if (!sent.ok) return c.json({ error: sent.error }, 502);
   return c.json({ ok: true });
@@ -100,16 +104,16 @@ function confirmPage(rawToken: string): string {
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body class="judge-portal-page">
-    <main class="judge-shell" style="grid-template-columns:1fr">
-      <section class="portal-gate">
-        <article class="locked-panel login-card">
-          <span>Sign in</span>
+  <body>
+    <main class="t-app-shell" style="grid-template-columns:1fr">
+      <section class="o-portal-gate">
+        <article class="t-gate-panel login-card">
+          <span class="a-section-tag">Sign in</span>
           <h2>Confirm it's you</h2>
           <p>For security, links aren't enough on their own — some email apps open them automatically to scan for safety. Click below to finish signing in.</p>
-          <form class="login-form" method="POST" action="/auth/callback">
+          <form class="o-login-form" method="POST" action="/auth/callback">
             <input type="hidden" name="token" value="${escapeHtml(rawToken)}">
-            <button class="primary-button" type="submit">Complete sign-in</button>
+            <button class="a-action-trigger a-action-trigger--primary" type="submit">Complete sign-in</button>
           </form>
         </article>
       </section>
@@ -159,6 +163,87 @@ auth.post("/auth/callback", async (c) => {
     maxAge: SESSION_TTL_SECONDS,
   });
   return c.redirect(user.role === "judge" ? "/" : "/admin.html");
+});
+
+/**
+ * One-click unsubscribe, same GET-confirms/POST-commits shape as the sign-in
+ * link above and for the same reason: a GET that mutated state would let
+ * mail-scanner link prefetching silently opt people out of invite emails.
+ */
+function unsubscribeConfirmPage(email: string, token: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Unsubscribe — UNBLOCKED Judging</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="t-app-shell" style="grid-template-columns:1fr">
+      <section class="o-portal-gate">
+        <article class="t-gate-panel login-card">
+          <span class="a-section-tag">Unsubscribe</span>
+          <h2>Stop these emails?</h2>
+          <p>${escapeHtml(email)} won't get invite or welcome emails going forward. This doesn't affect your sign-in link — you can always come back and sign in.</p>
+          <form class="o-login-form" method="POST" action="/email/unsubscribe">
+            <input type="hidden" name="email" value="${escapeHtml(email)}">
+            <input type="hidden" name="token" value="${escapeHtml(token)}">
+            <button class="a-action-trigger a-action-trigger--primary" type="submit">Unsubscribe me</button>
+          </form>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function unsubscribeDonePage(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Unsubscribed — UNBLOCKED Judging</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="t-app-shell" style="grid-template-columns:1fr">
+      <section class="o-portal-gate">
+        <article class="t-gate-panel login-card">
+          <span class="a-section-tag">Unsubscribe</span>
+          <h2>You're unsubscribed</h2>
+          <p>You won't get invite or welcome emails going forward.</p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+auth.get("/email/unsubscribe", async (c) => {
+  const email = (c.req.query("email") || "").trim().toLowerCase();
+  const token = c.req.query("token") || "";
+  if (!email || !(await verifyUnsubscribeToken(c.env, email, token))) {
+    return c.redirect("/?auth=invalid");
+  }
+  return c.html(unsubscribeConfirmPage(email, token));
+});
+
+auth.post("/email/unsubscribe", async (c) => {
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const email = (typeof form.email === "string" ? form.email : "").trim().toLowerCase();
+  const token = typeof form.token === "string" ? form.token : "";
+  if (!email || !(await verifyUnsubscribeToken(c.env, email, token))) {
+    return c.redirect("/?auth=invalid");
+  }
+  await c.env.DB.prepare("UPDATE users SET opted_out_at = datetime('now') WHERE email = ?")
+    .bind(email)
+    .run();
+  return c.html(unsubscribeDonePage());
 });
 
 auth.post("/api/auth/logout", async (c) => {

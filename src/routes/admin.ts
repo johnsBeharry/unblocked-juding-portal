@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv, ContestRow, ContestStatus, SubmissionRow } from "../types";
 import { CONTEST_STATUSES } from "../types";
 import { requireRole } from "../auth";
-import { emailShell, renderMarkdown, sendEmail } from "../email";
+import { emailShell, renderMarkdown, sendEmail, unsubscribeUrl } from "../email";
 import { computeResults } from "../results";
 import { parseCriteria, parseJsonObject, randomToken, sha256Hex, slugify } from "../util";
 
@@ -104,7 +104,7 @@ admin.get("/contests/:id", async (c) => {
   const criteria = parseCriteria(contest.criteria);
 
   const judges = await c.env.DB.prepare(
-    `SELECT u.id, u.email, u.name, u.role, cj.added_at,
+    `SELECT u.id, u.email, u.name, u.role, u.opted_out_at, cj.added_at,
        (SELECT COUNT(*) FROM round1_votes v JOIN submissions s ON s.id = v.submission_id
         WHERE s.contest_id = ? AND v.judge_id = u.id) AS round1_votes,
        (SELECT COUNT(*) FROM round2_ratings r JOIN submissions s ON s.id = r.submission_id
@@ -256,7 +256,7 @@ admin.get("/contests/:id/export.csv", async (c) => {
 
 admin.get("/users", requireRole("admin"), async (c) => {
   const users = await c.env.DB.prepare(
-    `SELECT u.id, u.email, u.name, u.role, u.created_at, u.last_seen_at,
+    `SELECT u.id, u.email, u.name, u.role, u.created_at, u.last_seen_at, u.opted_out_at,
        (SELECT created_at FROM invite_emails ie WHERE ie.user_id = u.id AND ie.status = 'sent'
         ORDER BY ie.id DESC LIMIT 1) AS invite_sent_at
      FROM users u ORDER BY u.role, u.email`,
@@ -292,20 +292,24 @@ admin.post("/users", requireRole("admin"), async (c) => {
 });
 
 admin.post("/users/:id/invite-email", async (c) => {
-  const target = await c.env.DB.prepare("SELECT id, email FROM users WHERE id = ?")
+  const target = await c.env.DB.prepare("SELECT id, email, opted_out_at FROM users WHERE id = ?")
     .bind(Number(c.req.param("id")))
-    .first<{ id: number; email: string }>();
+    .first<{ id: number; email: string; opted_out_at: string | null }>();
   if (!target) return c.json({ error: "not_found" }, 404);
+  if (target.opted_out_at) return c.json({ error: "recipient_unsubscribed" }, 409);
 
   const body = await c.req.json().catch(() => null);
   const subject = String(body?.subject || "").trim().slice(0, 200);
   const message = String(body?.body || "").trim().slice(0, 5000);
   if (!subject || !message) return c.json({ error: "subject_and_body_required" }, 400);
 
+  const origin = new URL(c.req.url).origin;
   const result = await sendEmail(c.env, {
     to: target.email,
     subject,
-    html: emailShell(renderMarkdown(message)),
+    html: emailShell(renderMarkdown(message), {
+      unsubscribeUrl: await unsubscribeUrl(c.env, origin, target.email),
+    }),
   });
 
   await c.env.DB.prepare(

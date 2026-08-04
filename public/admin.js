@@ -112,6 +112,7 @@ function renderMarkdownPreview(source) {
       '<a href="$2" style="color:#2850fe;text-decoration:underline">$1</a>',
     );
     out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    out = out.replace(/==([^=]+)==/g, '<mark style="background:#fff3a0;padding:0 2px">$1</mark>');
     return out;
   };
   const blocks = source.trim().split(/\n\s*\n/).filter(Boolean);
@@ -128,8 +129,8 @@ function renderMarkdownPreview(source) {
 function judgeInviteDraft(user, contestName) {
   const name = user.name || user.email.split("@")[0];
   return {
-    subject: `You're invited to judge ${contestName}`,
-    body: `Hi ${name},\n\nYou've been added as a judge for **${contestName}** on the UNBLOCKED judging portal.\n\nGo to the [judge portal](${window.location.origin}/) and enter this email address (${user.email}) — you'll get a one-time sign-in link, no password needed.\n\nThanks for judging!`,
+    subject: `Judging ${contestName}`,
+    body: `Hey ${name},\n\nYou're in — you've been added as a judge for **${contestName}** on the UNBLOCKED judging portal.\n\n→ [Head to the judge portal](${window.location.origin}/) and ==enter ${user.email}==. You'll get a one-time sign-in link, no password needed.\n\nCreatives have put real work into these. Take your time with them.\n\nThanks for judging.`,
   };
 }
 
@@ -137,8 +138,8 @@ function accountInviteDraft(user) {
   const name = user.name || user.email.split("@")[0];
   const roleLabel = user.role === "admin" ? "an administrator" : user.role === "manager" ? "a contest manager" : "a judge";
   return {
-    subject: "You're invited to UNBLOCKED Judging",
-    body: `Hi ${name},\n\nYou've been added as ${roleLabel} on the UNBLOCKED judging admin console.\n\nGo to the [admin console](${window.location.origin}/admin.html) and enter this email address (${user.email}) — you'll get a one-time sign-in link, no password needed.`,
+    subject: "You're in",
+    body: `Hey ${name},\n\nYou've been added as ${roleLabel} on the UNBLOCKED judging admin console.\n\n→ [Head to the admin console](${window.location.origin}/admin.html) and ==enter ${user.email}==. You'll get a one-time sign-in link, no password needed.`,
   };
 }
 
@@ -183,11 +184,11 @@ function composeModalMarkup() {
 
       ${cm.mode === "edit"
         ? `<textarea class="a-input-textarea" data-compose-body rows="10" maxlength="5000">${esc(cm.body)}</textarea>
-           <p class="a-workflow-note">Basic markdown: **bold**, [link text](https://…), and "- " bullet lists.</p>`
+           <p class="a-workflow-note">Basic markdown: **bold**, ==highlight== (use sparingly), [link text](https://…), and "- " bullet lists.</p>`
         : `<div class="o-compose-preview">
              <div class="o-compose-preview-frame">
-               <p class="o-compose-preview-kicker">UNBLOCKED Judging</p>
                ${renderMarkdownPreview(cm.body)}
+               <p style="margin:32px 0 0">Bests,<br>Johns</p>
              </div>
            </div>`}
 
@@ -379,7 +380,9 @@ function contestDetailMarkup() {
                   <td>${j.round2_ratings} rated</td>
                   <td>
                     ${j.invite_sent_at ? `<span class="a-status-chip">Sent ${esc(j.invite_sent_at)}</span><br>` : ""}
-                    <button class="a-action-trigger a-action-trigger--dim" type="button" data-send-judge-invite="${j.id}">${j.invite_sent_at ? "Resend" : "Send invite"}</button>
+                    ${j.opted_out_at
+                      ? `<span class="a-status-chip">Unsubscribed</span>`
+                      : `<button class="a-action-trigger a-action-trigger--dim" type="button" data-send-judge-invite="${j.id}">${j.invite_sent_at ? "Resend" : "Send invite"}</button>`}
                   </td>
                   <td><button class="a-action-trigger a-action-trigger--danger" type="button" data-remove-judge="${j.id}">Remove</button></td>
                 </tr>`).join("") || `<tr><td colspan="5">No judges on the panel yet.</td></tr>`}
@@ -455,7 +458,9 @@ function usersMarkup() {
                   <td>${esc(u.last_seen_at || "never")}</td>
                   <td>
                     ${u.invite_sent_at ? `<span class="a-status-chip">Sent ${esc(u.invite_sent_at)}</span><br>` : ""}
-                    <button class="a-action-trigger a-action-trigger--dim" type="button" data-send-invite="${u.id}">${u.invite_sent_at ? "Resend" : "Send invite"}</button>
+                    ${u.opted_out_at
+                      ? `<span class="a-status-chip">Unsubscribed</span>`
+                      : `<button class="a-action-trigger a-action-trigger--dim" type="button" data-send-invite="${u.id}">${u.invite_sent_at ? "Resend" : "Send invite"}</button>`}
                   </td>
                 </tr>`).join("")}
             </tbody>
@@ -732,7 +737,11 @@ document.addEventListener("click", async (event) => {
       body: JSON.stringify({ subject: cm.subject, body: cm.body }),
     });
     state.compose = null;
-    state.notice = res.ok ? `Welcome email sent to ${cm.userEmail}.` : "Couldn't send the email — check the Resend configuration and try again.";
+    state.notice = res.ok
+      ? `Welcome email sent to ${cm.userEmail}.`
+      : res.body?.error === "recipient_unsubscribed"
+        ? `${cm.userEmail} unsubscribed from these emails — nothing sent.`
+        : "Couldn't send the email — check the Resend configuration and try again.";
     if (state.view === "contest") return openContest(state.contestDetail.contest.id);
     if (state.view === "users") return switchView("users");
     return render();
