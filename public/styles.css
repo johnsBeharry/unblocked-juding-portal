@@ -309,7 +309,7 @@ ub-warning-modal {
   color: var(--color-brand-primary);
 }
 
-.a-star-toggle:hover:not(:disabled) {
+.a-star-toggle.is-hover:not(:disabled) {
   color: var(--color-brand-primary);
   opacity: 0.8;
 }

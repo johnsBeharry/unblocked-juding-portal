@@ -37,7 +37,8 @@ class UbStarRating extends HTMLElement {
       <div class="m-star-rating__buttons">${stars}</div>`;
 
     if (readonly) return;
-    this.querySelectorAll("[data-star-value]").forEach((button) => {
+    const buttons = this.querySelectorAll("[data-star-value]");
+    buttons.forEach((button) => {
       button.addEventListener("click", () => {
         const newValue = Number(button.dataset.starValue);
         this.setAttribute("value", String(newValue));
@@ -46,6 +47,15 @@ class UbStarRating extends HTMLElement {
           bubbles: true,
         }));
       });
+      button.addEventListener("mouseenter", () => {
+        const hoverValue = Number(button.dataset.starValue);
+        buttons.forEach((b) => {
+          b.classList.toggle("is-hover", Number(b.dataset.starValue) <= hoverValue);
+        });
+      });
+    });
+    this.querySelector(".m-star-rating__buttons").addEventListener("mouseleave", () => {
+      buttons.forEach((b) => b.classList.remove("is-hover"));
     });
   }
 }
