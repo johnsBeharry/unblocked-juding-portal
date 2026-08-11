@@ -3,6 +3,9 @@
 	"name": "unblocked-juding-portal",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-01",
+	"rules": [
+		{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }
+	],
 	"assets": {
 		"directory": "./public",
 		"binding": "ASSETS",

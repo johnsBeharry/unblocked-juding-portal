@@ -5,11 +5,15 @@ import { auth } from "./routes/auth";
 import { portal } from "./routes/portal";
 import { admin } from "./routes/admin";
 import { external } from "./routes/external";
+import { docs } from "./routes/docs";
 
 const app = new Hono<AppEnv>();
 
 // External submission API: API-key auth, no cookies.
 app.route("/api/v1", external);
+
+// Public API docs, no auth.
+app.route("/", docs);
 
 // Magic-link sign-in/out — registered before the session gate below.
 app.route("/", auth);

@@ -13,6 +13,7 @@ export const external = new Hono<AppEnv>();
 const STATIC_LIMIT = 5 * 1024 * 1024; // jpg/png/pdf
 const MOTION_LIMIT = 20 * 1024 * 1024; // gif/mp4
 const MAX_ASSETS = 3;
+const IMAGE_URL_FETCH_TIMEOUT_MS = 15_000;
 
 type Detected = { mime: string; ext: string; limit: number };
 
@@ -86,17 +87,61 @@ external.post("/contests/:slug/submissions", async (c) => {
   if (!title) return c.json({ error: "title_required" }, 400);
 
   const file = form.get("file");
-  if (!(file instanceof File)) return c.json({ error: "file_required" }, 400);
+  const hasFile = file instanceof File;
+  const imageUrl = text("image_url", 2000);
+  if (hasFile && imageUrl) return c.json({ error: "provide_file_or_image_url_not_both" }, 400);
+  if (!hasFile && !imageUrl) return c.json({ error: "file_or_image_url_required" }, 400);
 
-  const fileBytes = new Uint8Array(await file.arrayBuffer());
-  const detected = detectFileType(fileBytes);
-  if (!detected) return c.json({ error: "unsupported_file_type", accepted: ["jpg", "png", "gif", "pdf", "mp4"] }, 415);
-  if (fileBytes.byteLength > detected.limit) {
-    return c.json({ error: "file_too_large", limitBytes: detected.limit }, 413);
+  let sourceBytes: Uint8Array;
+  if (hasFile) {
+    sourceBytes = new Uint8Array(await file.arrayBuffer());
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(imageUrl);
+    } catch {
+      return c.json({ error: "invalid_image_url" }, 400);
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return c.json({ error: "invalid_image_url" }, 400);
+    }
+
+    // Fetched once at submission time and mirrored into R2 below — the
+    // portal never re-fetches it, so it doesn't matter if the source later
+    // moves or goes offline.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IMAGE_URL_FETCH_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(parsed.toString(), { signal: controller.signal });
+    } catch {
+      return c.json({ error: "image_url_fetch_failed" }, 400);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      return c.json({ error: "image_url_fetch_failed", httpStatus: response.status }, 400);
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MOTION_LIMIT) {
+      return c.json({ error: "image_too_large", limitBytes: MOTION_LIMIT }, 413);
+    }
+    sourceBytes = new Uint8Array(await response.arrayBuffer());
+    if (sourceBytes.byteLength > MOTION_LIMIT) {
+      return c.json({ error: "image_too_large", limitBytes: MOTION_LIMIT }, 413);
+    }
   }
 
   const publicId = publicSubmissionId(contest.slug);
+
+  const detected = detectFileType(sourceBytes);
+  if (!detected) return c.json({ error: "unsupported_file_type", accepted: ["jpg", "png", "gif", "pdf", "mp4"] }, 415);
+  if (sourceBytes.byteLength > detected.limit) {
+    return c.json({ error: "file_too_large", limitBytes: detected.limit }, 413);
+  }
   const fileKey = `contest-${contest.id}/${publicId}.${detected.ext}`;
+  const fileType = detected.mime;
+  await c.env.POSTERS.put(fileKey, sourceBytes, { httpMetadata: { contentType: detected.mime } });
 
   // Optional supporting assets (same accepted types/limits).
   const assetKeys: string[] = [];
@@ -132,7 +177,6 @@ external.post("/contests/:slug/submissions", async (c) => {
   }
   if (assetKeys.length) metadata.asset_keys = JSON.stringify(assetKeys);
 
-  await c.env.POSTERS.put(fileKey, fileBytes, { httpMetadata: { contentType: detected.mime } });
   for (const upload of assetUploads) {
     await c.env.POSTERS.put(upload.key, upload.bytes, { httpMetadata: { contentType: upload.mime } });
   }
@@ -152,7 +196,7 @@ external.post("/contests/:slug/submissions", async (c) => {
       text("concept", 4000),
       JSON.stringify(metadata),
       fileKey,
-      detected.mime,
+      fileType,
     )
     .run();
 
