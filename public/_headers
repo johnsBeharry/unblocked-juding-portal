@@ -66,3 +66,13 @@
   X-Frame-Options: DENY
   Referrer-Policy: same-origin
   Content-Security-Policy: default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-eval'; connect-src 'self'; font-src https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+
+# Public API reference (Scalar, self-hosted at /vendor/scalar/). Its bundle
+# needs no eval, so this stays as strict as the app. connect-src 'self' means
+# "Test Request" can only reach this same server — an API key typed into the
+# page can never be sent to a third party.
+/docs/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self'; font-src https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

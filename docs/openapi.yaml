@@ -1,0 +1,287 @@
+openapi: 3.0.3
+info:
+  title: UNBLOCKED Judging Portal — External Submission API
+  version: "1.0.0"
+  description: |
+    Lets the external submission system push poster entries into the judging
+    portal. The submission form itself is **not** part of this repository.
+
+    **Authentication.** Write requests need an API key created in the admin
+    console (**Admin → API Keys**). Keys look like `ubk_…`, are shown once at
+    creation, and may be scoped to a single contest. Send it as
+    `Authorization: Bearer ubk_…` or `X-Api-Key: ubk_…`. Keep keys server-side;
+    never ship one in client-side JavaScript.
+
+    **Contest lifecycle.** A contest only accepts submissions while its status is
+    `open` (`draft → open → round1 → round2 → deliberation → complete → archived`).
+
+    **Test requests.** Open an operation, enter a key under *Authentication*,
+    and press *Test Request*. Requests go to this same server and **create real
+    data** — use a test contest.
+
+    **Rate limiting.** Add a Cloudflare WAF rule on `POST /api/v1/*`
+    (e.g. 10 requests/minute/IP).
+
+    Prose version of these docs: [`/docs/external-api.md`](/docs/external-api.md).
+servers:
+  - url: /api/v1
+    description: This server
+
+tags:
+  - name: Contests
+    description: Read contest state (public).
+  - name: Submissions
+    description: Push poster entries (API key required).
+
+paths:
+  /contests/{slug}:
+    get:
+      tags: [Contests]
+      operationId: getContest
+      summary: Get a contest's public state
+      description: |
+        Public — no key required. Use it to render the form state
+        ("submissions open" / "closed").
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      security: []
+      responses:
+        "200":
+          description: The contest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contest"
+              example:
+                slug: ownership-2026
+                name: Ownership 2026
+                theme: Ownership
+                description: "…"
+                acceptingSubmissions: true
+        "404":
+          description: Unknown slug, or the contest is archived.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: not_found
+
+  /contests/{slug}/submissions:
+    post:
+      tags: [Submissions]
+      operationId: createSubmission
+      summary: Submit one poster entry
+      description: |
+        Provide the poster image **either** as an uploaded file (`file`) **or**
+        as a link to an image hosted elsewhere (`image_url`) — exactly one of
+        the two.
+
+        File types are detected from content (magic bytes), not the filename or
+        any `Content-Type` header. JPG/PNG/PDF max 5 MB; GIF/MP4 max 20 MB.
+
+        **`image_url`:** the portal fetches the URL once at submission time
+        (15s timeout, 20 MB cap checked via `Content-Length` before reading the
+        body) and **mirrors the bytes into its own storage**, exactly like an
+        upload. The same type check and size limits apply. If the source later
+        goes offline, the submission is unaffected. `assets` are upload-only.
+
+        Keep the returned `id` — it is the entry's public reference in the
+        judging portal. There is no public status endpoint.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      security:
+        - BearerKey: []
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/SubmissionForm"
+            encoding:
+              assets:
+                contentType: image/jpeg, image/png, image/gif, application/pdf, video/mp4
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Created"
+              example:
+                id: OWN-4F2A9C
+                status: submitted
+        "400":
+          description: Bad request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                title_required:
+                  value: { error: title_required }
+                file_or_image_url_required:
+                  value: { error: file_or_image_url_required }
+                both_provided:
+                  value: { error: provide_file_or_image_url_not_both }
+                invalid_image_url:
+                  value: { error: invalid_image_url }
+                image_url_fetch_failed:
+                  summary: Network error, timeout, or non-2xx from the source
+                  value: { error: image_url_fetch_failed, httpStatus: 404 }
+                not_multipart:
+                  value: { error: expected_multipart_form_data }
+                too_many_assets:
+                  value: { error: too_many_assets, max: 3 }
+        "401":
+          description: Missing, unknown, revoked, or wrong-contest API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: invalid_api_key
+        "404":
+          description: Unknown contest slug.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: not_found
+        "409":
+          description: The contest is not accepting submissions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: submissions_closed
+                status: round1
+        "413":
+          description: A file is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                file_too_large:
+                  value: { error: file_too_large, limitBytes: 5242880 }
+                image_too_large:
+                  value: { error: image_too_large, limitBytes: 20971520 }
+                asset_too_large:
+                  value: { error: asset_too_large, asset: extra.png, limitBytes: 5242880 }
+                payload_too_large:
+                  value: { error: payload_too_large }
+        "415":
+          description: Unrecognised file type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                unsupported_file_type:
+                  value: { error: unsupported_file_type, accepted: [jpg, png, gif, pdf, mp4] }
+                unsupported_asset_type:
+                  value: { error: unsupported_asset_type, asset: extra.bin }
+
+components:
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      description: Contest slug.
+      schema:
+        type: string
+        example: ownership-2026
+
+  securitySchemes:
+    BearerKey:
+      type: http
+      scheme: bearer
+      description: "API key (`ubk_…`) as `Authorization: Bearer ubk_…`."
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: "Alternative: API key (`ubk_…`) in the `X-Api-Key` header."
+
+  schemas:
+    Contest:
+      type: object
+      required: [slug, name, theme, description, acceptingSubmissions]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        theme: { type: string }
+        description: { type: string }
+        acceptingSubmissions:
+          type: boolean
+          description: True only while the contest status is `open`.
+
+    SubmissionForm:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          description: Poster title.
+          example: The Locked Garden
+        file:
+          type: string
+          format: binary
+          description: The poster file. Provide this **or** `image_url`, not both.
+        image_url:
+          type: string
+          format: uri
+          maxLength: 2000
+          description: |
+            Public `http(s)://` link to the poster image. Provide this **or**
+            `file`, not both. Fetched once and mirrored into storage.
+          example: https://cdn.example.com/uploads/locked-garden.jpg
+        artist_name: { type: string, maxLength: 200, example: Elena Moretti }
+        artist_email: { type: string, maxLength: 200, example: elena@example.com }
+        country: { type: string, maxLength: 100, example: Italy }
+        concept:
+          type: string
+          maxLength: 4000
+          description: Poster concept / rationale.
+        year_designed: { type: string, maxLength: 500, description: Stored as metadata. }
+        designed_for: { type: string, maxLength: 500, description: Stored as metadata. }
+        client_name: { type: string, maxLength: 500, description: Stored as metadata. }
+        creation_method: { type: string, maxLength: 500, description: Stored as metadata., example: Digital illustration }
+        materials_used: { type: string, maxLength: 500, description: Stored as metadata. }
+        digital_programs: { type: string, maxLength: 500, description: Stored as metadata. }
+        printing_method: { type: string, maxLength: 500, description: Stored as metadata. }
+        age: { type: string, maxLength: 500, description: Stored as metadata. }
+        assets:
+          type: array
+          maxItems: 3
+          description: Up to 3 supporting files (repeat the field). Uploads only.
+          items:
+            type: string
+            format: binary
+
+    Created:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Public reference for the entry.
+          example: OWN-4F2A9C
+        status:
+          type: string
+          enum: [submitted]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code.
+      additionalProperties: true

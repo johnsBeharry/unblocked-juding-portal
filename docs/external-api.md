@@ -9,6 +9,7 @@ two endpoints.
 - **Path prefix**: `/api/v1`
 - All responses are JSON.
 - This page is also published at `https://<your-worker-domain>/docs/external-api.md` — no login required, safe to share with the external platform team directly.
+- Interactive API reference (Scalar): `https://<your-worker-domain>/docs/`. The OpenAPI 3 spec behind it is at `https://<your-worker-domain>/docs/openapi.yaml` — import it into Postman/Insomnia or a client generator.
 
 ## Authentication
 
