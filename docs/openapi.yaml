@@ -195,7 +195,7 @@ components:
       description: Contest slug.
       schema:
         type: string
-        example: ownership-2026
+        example: test-november
 
   securitySchemes:
     BearerKey:
