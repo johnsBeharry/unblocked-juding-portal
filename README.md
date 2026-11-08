@@ -7,8 +7,10 @@ results).
 
 Built entirely on Cloudflare: a Worker (Hono + TypeScript) serving the static
 portal, a JSON API, a D1 database, and R2 for poster files. Poster entries
-arrive from an **external submission system** (not in this repo) through the
-API described in [docs/external-api.md](docs/external-api.md).
+arrive from the **submission form** at link.unblocked.world (the
+`unblocked-links` Worker, not in this repo) through the API described in
+[docs/external-api.md](docs/external-api.md). Artists confirm their email with
+a code, save drafts as they go, and can come back any day to submit more.
 
 ## Architecture
 
@@ -24,10 +26,15 @@ src/
     auth.ts      Magic-link sign-in via Resend (request-link, callback, logout)
     portal.ts    Judge endpoints (votes, ratings, contest view)
     admin.ts     Contest/judge/user/API-key management, welcome emails, CSV export
-    external.ts  /api/v1 submission intake (API-key auth)
+    external.ts  /api/v1 one-shot submission intake (API-key auth)
+    artists.ts   /api/v1 artist sign-in, profile, drafts, submit/withdraw
+  contest.ts     Open/closed/withdrawal rules, consent version
+  events.ts      Append-only entry history (entry_events)
+  files.ts       File type sniffing and size limits
   results.ts     Panel-wide score aggregation
 migrations/      D1 schema
-scripts/         seed-demo.sql (local demo data)
+scripts/         check-judging-pool.mjs (npm run check)
+docs/            external-api.md + openapi.yaml (served at /docs/)
 ```
 
 **Roles:** `admin` (everything, incl. users + API keys), `manager` (contests,
@@ -38,6 +45,32 @@ panels, round control), `judge` (vote + rate in assigned contests).
 only ever see the active stage. Round 1 is judged blind (artist identity
 hidden until Round 2). Advancement to Round 2 is picked in the admin console
 ("preselect majority" + manual override).
+
+## Artist accounts, drafts and withdrawals
+
+- **Sign-in:** artists get a 6-digit code (and, if the form's API key has a
+  sign-in link base, a one-click link) by email through Resend. Codes are
+  stored as HMACs with `ARTIST_CODE_SECRET`, expire in 15 minutes, lock after
+  5 wrong tries, and are limited to 3 per address per 15 minutes. Links use
+  the same two-step confirm as judge links, so mail scanners can't use them up.
+  Sessions last 30 days. Artist tables and sessions are separate from judges.
+- **Profile:** email, name, country and Instagram (optional). Submissions copy
+  these at the moment they're sent, so later edits don't change what judges saw.
+- **Drafts** live in `entries`, never in `submissions`. Files upload to
+  `drafts/contest-<id>/<entry>/` in R2 (judges can't reach that path) and are
+  copied to `contest-<id>/<public-id>.<ext>` on submit.
+- **What gets judged:** every judge-facing query reads the `judging_pool`
+  view (submitted, not withdrawn, not disqualified). `npm run check` fails if
+  judge code reads `submissions` directly.
+- **Nothing is deleted.** Withdrawing sets `withdrawn_at`; removing a draft
+  sets `status = 'discarded'`. Database triggers refuse `DELETE` on
+  `submissions` and `entries`, and any change to `entry_events`, the history
+  used for statistics. Votes on a withdrawn entry stay in the database but
+  stop counting.
+- **Withdrawal window:** artists can withdraw while the contest is open and
+  judging has never started (`judging_started_at`, set the first time the
+  contest moves past Open and never cleared). After that, staff can withdraw
+  or restore from the admin console, with a reason.
 
 ## Authentication (magic links via Resend)
 
@@ -64,6 +97,10 @@ consistent with the sign-in email.
 Setup:
 
 1. `npx wrangler secret put RESEND_API_KEY` (already done for this worker).
+   For artist sign-in also run `npx wrangler secret put ARTIST_CODE_SECRET`
+   with a random value (e.g. `openssl rand -hex 32`). Without it, artist
+   sign-in returns `artist_signin_not_configured`. Artist emails are sent from
+   `MAIL_FROM_ARTISTS` (`UNBLOCKED <submissions@mail.pxpush.com>`).
 2. **Verify a sending domain in Resend** and set `MAIL_FROM` in
    `wrangler.jsonc` (e.g. `"UNBLOCKED Judging <judging@peakshift.com>"`).
    Until then the default `onboarding@resend.dev` sender only delivers to the
@@ -86,28 +123,48 @@ In dev mode you are `DEV_USER_EMAIL` (an admin). To act as another user, send
 an `x-dev-user: someone@example.com` header (curl) or temporarily change
 `DEV_USER_EMAIL`.
 
+For artist sign-in locally, add to `.dev.vars`:
+
+```
+ARTIST_CODE_SECRET=<any random string>
+ARTIST_EMAIL_MODE=log   # print artist emails (with the code) to the console instead of sending
+```
+
+Run `npm run check` before pushing: it type-checks and makes sure judge-facing
+code only reads the `judging_pool` view.
+
 ## Deployment
 
 The repo auto-deploys to the `unblocked-juding-portal` Worker via the GitHub
 integration (Workers Builds picks up `wrangler.jsonc`).
 
 Provisioned already: R2 bucket `unblocked-posters`, remote D1
-(`unblocked-judging`, migrated), and the `RESEND_API_KEY` secret. For future
-schema changes: `npm run migrate:remote`.
+(`unblocked-judging`, migrated), and the `RESEND_API_KEY` secret.
+
+**Every push deploys**, so for schema changes run `npm run migrate:remote`
+*before* pushing code that uses the new tables or columns. Migrations only
+add tables and columns; never rebuild `submissions` (dropping it would
+cascade-delete every vote and rating, and the no-delete trigger blocks it).
 
 Remaining one-time steps:
 
 1. Verify a sending domain in Resend and update `MAIL_FROM` (above).
 2. Optionally add a WAF rate-limiting rule on `POST /api/v1/*` and
-   `POST /api/auth/request-link`.
+   `POST /api/auth/request-link`. Traffic from the links Worker arrives over a
+   service binding and skips these rules; the links Worker limits sign-in code
+   requests itself.
 
 ## Operating a contest
 
 1. Admin console → **New Contest** (criteria default to Theme Relevance,
    Concept, Execution, Creativity).
-2. Create an **API key** and hand it to the external submission form team
-   with [docs/external-api.md](docs/external-api.md).
-3. Set status **Submissions Open**; entries flow in via `/api/v1`.
+2. Create an **API key** with the form's **sign-in link base** (e.g.
+   `https://link.unblocked.world/form/test`) and store it as a secret in the
+   links Worker. See [docs/external-api.md](docs/external-api.md).
+3. **Edit contest** to set an optional closing date and entries-per-artist
+   limit, then set status **Submissions Open**. Artists sign in, save drafts
+   and submit via `/api/v1`. The contest list shows submissions, drafts in
+   progress and withdrawals.
 4. Add judges to the panel (their sign-in email).
 5. Status **Round 1** → judges swipe Yes/No (blind).
 6. **Save Round 2 selection** (majority preselect or manual) → status
@@ -120,7 +177,13 @@ Remaining one-time steps:
 - All portal/API routes require an authenticated, invited user; role checks
   on every admin route; judges can only fetch files for their own contests.
 - External intake: API keys stored as SHA-256 hashes, shown once; file type
-  sniffed by magic bytes, size-capped; submissions only while status `open`.
+  sniffed by magic bytes, size-capped; submissions only while status `open`
+  and before the closing date.
+- Artist sessions are only accepted with a valid API key; artist codes are
+  HMAC'd, link tokens and sessions SHA-256 hashed. Sign-in link bases come
+  from the API key's settings, never from a request.
+- Judges only ever read the `judging_pool` view and can only open files that
+  belong to entries in it.
 - Mutations reject cross-site requests (`Sec-Fetch-Site`); all rendered
   strings are HTML-escaped; strict CSP + nosniff via `public/_headers`.
 

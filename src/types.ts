@@ -11,6 +11,12 @@ export type Env = {
   RESEND_API_KEY?: string;
   /** Sender for sign-in emails, e.g. "UNBLOCKED Judging <judging@example.com>". */
   MAIL_FROM?: string;
+  /** Sender for artist emails (sign-in code, receipt, withdrawal). */
+  MAIL_FROM_ARTISTS?: string;
+  /** Secret used to HMAC artist sign-in codes (wrangler secret put ARTIST_CODE_SECRET). */
+  ARTIST_CODE_SECRET?: string;
+  /** "log" prints artist emails to the console instead of sending them (local dev). */
+  ARTIST_EMAIL_MODE?: string;
 };
 
 export type Role = "admin" | "manager" | "judge";
@@ -50,6 +56,9 @@ export type ContestRow = {
   status: ContestStatus;
   criteria: string;
   created_at: string;
+  closes_at: string | null;
+  judging_started_at: string | null;
+  max_entries_per_artist: number | null;
 };
 
 export type SubmissionRow = {
@@ -67,11 +76,77 @@ export type SubmissionRow = {
   status: "submitted" | "disqualified";
   advanced: number;
   created_at: string;
+  artist_id: number | null;
+  entry_id: string | null;
+  instagram: string;
+  withdrawn_at: string | null;
+  consent_version: string | null;
+};
+
+export type ArtistRow = {
+  id: number;
+  email: string;
+  name: string;
+  country: string;
+  instagram: string;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+};
+
+export type EntryStatus = "draft" | "submitted" | "withdrawn" | "discarded";
+
+export type EntryAsset = { id: string; key: string; type: string; name: string; size: number };
+
+export type EntryRow = {
+  id: string;
+  contest_id: number;
+  artist_id: number;
+  status: EntryStatus;
+  title: string;
+  concept: string;
+  metadata: string;
+  file_key: string | null;
+  file_type: string | null;
+  file_name: string | null;
+  file_size: number | null;
+  assets: string;
+  version: number;
+  submission_id: number | null;
+  created_at: string;
+  updated_at: string;
+  submitted_at: string | null;
+  withdrawn_at: string | null;
+  discarded_at: string | null;
+};
+
+export type EntryEventType =
+  | "created"
+  | "file_added"
+  | "file_replaced"
+  | "file_removed"
+  | "submitted"
+  | "withdrawn"
+  | "restored"
+  | "discarded"
+  | "disqualified"
+  | "requalified"
+  | "advanced"
+  | "unadvanced";
+
+export type ApiKeyRow = {
+  id: number;
+  name: string;
+  contest_id: number | null;
+  signin_url: string | null;
 };
 
 export type AppEnv = {
   Bindings: Env;
   Variables: {
     user: UserRow;
+    apiKey: ApiKeyRow;
+    artist: ArtistRow;
+    contest: ContestRow;
   };
 };

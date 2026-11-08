@@ -59,14 +59,15 @@ portal.get("/contests/:id", async (c) => {
 
   const subs = judgingStarted
     ? await c.env.DB.prepare(
-        "SELECT * FROM submissions WHERE contest_id = ? AND status = 'submitted' ORDER BY id",
+        "SELECT * FROM judging_pool WHERE contest_id = ? ORDER BY id",
       )
         .bind(contest.id)
         .all<SubmissionRow>()
     : { results: [] as SubmissionRow[] };
 
-  // Round 1 is judged blind: artist identity is withheld until the contest
-  // moves past round1 (staff always see it in the admin console instead).
+  // Round 1 is judged blind: artist identity (name, country, Instagram,
+  // metadata) is withheld until the contest moves past round1. Staff see it
+  // in the admin console instead. Judges never receive the artist's email.
   const revealArtist = contest.status !== "round1";
   const submissions = subs.results.map((s) => ({
     id: s.id,
@@ -74,6 +75,7 @@ portal.get("/contests/:id", async (c) => {
     title: s.title,
     artistName: revealArtist ? s.artist_name : "",
     country: revealArtist ? s.country : "",
+    instagram: revealArtist ? s.instagram || "" : "",
     concept: s.concept,
     metadata: revealArtist ? parseJsonObject(s.metadata) : {},
     fileUrl: s.file_key ? `/files/${s.file_key}` : null,
@@ -83,7 +85,7 @@ portal.get("/contests/:id", async (c) => {
 
   const votes = await c.env.DB.prepare(
     `SELECT v.submission_id, v.decision FROM round1_votes v
-     JOIN submissions s ON s.id = v.submission_id
+     JOIN judging_pool s ON s.id = v.submission_id
      WHERE s.contest_id = ? AND v.judge_id = ?`,
   )
     .bind(contest.id, user.id)
@@ -91,7 +93,7 @@ portal.get("/contests/:id", async (c) => {
 
   const ratings = await c.env.DB.prepare(
     `SELECT r.submission_id, r.ratings FROM round2_ratings r
-     JOIN submissions s ON s.id = r.submission_id
+     JOIN judging_pool s ON s.id = r.submission_id
      WHERE s.contest_id = ? AND r.judge_id = ?`,
   )
     .bind(contest.id, user.id)
@@ -141,7 +143,7 @@ portal.post("/contests/:id/votes", async (c) => {
   }
 
   const sub = await c.env.DB.prepare(
-    "SELECT id FROM submissions WHERE id = ? AND contest_id = ? AND status = 'submitted'",
+    "SELECT id FROM judging_pool WHERE id = ? AND contest_id = ?",
   )
     .bind(submissionId, contest.id)
     .first();
@@ -188,7 +190,7 @@ portal.post("/contests/:id/ratings", async (c) => {
   }
 
   const sub = await c.env.DB.prepare(
-    "SELECT id FROM submissions WHERE id = ? AND contest_id = ? AND status = 'submitted' AND advanced = 1",
+    "SELECT id FROM judging_pool WHERE id = ? AND contest_id = ? AND advanced = 1",
   )
     .bind(submissionId, contest.id)
     .first();

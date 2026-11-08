@@ -1,9 +1,15 @@
 # UNBLOCKED Judging Portal — External Submission API
 
-This API lets the external submission system (the public UNBLOCKED site /
-submission form) push poster entries into the judging portal. The submission
-form itself is **not** part of this repository — it only needs to call these
-two endpoints.
+This API lets the submission form (link.unblocked.world, not part of this
+repository) push poster entries into the judging portal. There are two ways
+to use it:
+
+- **One-shot submissions** (`POST /contests/:slug/submissions`): send a
+  finished poster in one request with just an API key.
+- **Artist accounts** (`/artists/*`, `/me`, `/contests/:slug/me/*`): artists
+  confirm their email with a 6-digit code, save drafts as they work, come back
+  any day to submit more, and can withdraw an entry before judging starts.
+  See [Artist accounts and drafts](#artist-accounts-and-drafts).
 
 - **Base URL**: `https://<your-worker-domain>` (e.g. `https://unblocked-juding-portal.<account>.workers.dev`)
 - **Path prefix**: `/api/v1`
@@ -30,8 +36,9 @@ in the submission system — never ship it in client-side JavaScript.
 
 ## Contest lifecycle
 
-A contest only accepts submissions while its status is `open`. Statuses move
-through: `draft → open → round1 → round2 → deliberation → complete → archived`.
+A contest only accepts submissions while its status is `open` and, if it has
+a closing date, before that date. Statuses move through:
+`draft → open → round1 → round2 → deliberation → complete → archived`.
 Once judging starts (`round1`), submissions are closed.
 
 ---
@@ -49,9 +56,21 @@ Public (no key required). Use it to render the form state ("submissions open" /
   "name": "Ownership 2026",
   "theme": "Ownership",
   "description": "…",
-  "acceptingSubmissions": true
+  "acceptingSubmissions": true,
+  "closesAt": "2027-01-31T23:59:00.000Z",
+  "maxEntriesPerArtist": 5,
+  "withdrawalsOpen": true,
+  "consentVersion": "2026-11-08"
 }
 ```
+
+| Field | Meaning |
+| ----- | ------- |
+| `acceptingSubmissions` | `open` and before `closesAt` |
+| `closesAt` | Closing date and time (UTC), or `null` |
+| `maxEntriesPerArtist` | Active submissions allowed per artist account, or `null` |
+| `withdrawalsOpen` | Artists can withdraw: `open` and judging has never started |
+| `consentVersion` | Version of the submission terms; send it back when submitting |
 
 `404` if the slug is unknown or the contest is archived.
 
@@ -118,7 +137,7 @@ upload or from fetching `image_url`.
 | `201`  | `{ "id": "OWN-4F2A9C", "status": "submitted" }`             |
 | `400`  | `{ "error": "title_required" \| "file_or_image_url_required" \| "provide_file_or_image_url_not_both" \| "invalid_image_url" \| "image_url_fetch_failed" \| … }` |
 | `401`  | `{ "error": "invalid_api_key" }`                            |
-| `409`  | `{ "error": "submissions_closed", "status": "round1" }`     |
+| `409`  | `{ "error": "submissions_closed", "status": "round1" }` (not open, or past the closing date) |
 | `413`  | `{ "error": "file_too_large" \| "image_too_large", "limitBytes": 5242880 }` |
 | `415`  | `{ "error": "unsupported_file_type", "accepted": [...] }`   |
 
@@ -127,7 +146,9 @@ responses from the source URL (an `httpStatus` field is included when the
 source did respond, just not with a success status).
 
 Keep the returned `id` — it is the entry's public reference in the judging
-portal (there is no public status endpoint; artists are contacted by email).
+portal. One-shot submissions aren't tied to an artist account until that email
+address signs in; they then appear in the artist's list as read-only
+(`earlierSubmissions`).
 
 ### Example — uploading a file
 
@@ -166,14 +187,89 @@ Both examples return the same response shape:
 ## Rate limiting & abuse
 
 Put a Cloudflare WAF rate-limiting rule on `POST /api/v1/*` (e.g. 10 requests
-per minute per IP) in the dashboard. The endpoint additionally enforces
+per minute per IP) in the dashboard. Note that requests arriving through a
+service binding (the links Worker) skip the portal's WAF rules, so the links
+Worker limits sign-in code requests by IP itself (5 per minute) and the portal
+limits each email address to 3 codes per 15 minutes. The endpoint additionally enforces
 per-file size limits and rejects unknown file types — including for bytes
 fetched via `image_url`, so a submission can't be used to smuggle an
 oversized or unexpected file type into storage just by pointing at a URL
 instead of uploading directly.
 
+## Artist accounts and drafts
+
+These endpoints are for a **server** that sits between the artist's browser
+and the portal (on link.unblocked.world that's the links Worker). Every call
+needs the API key. Calls for a signed-in artist also need
+`X-Artist-Session: <session token>`. The portal only accepts that header
+together with a valid key, so keep both server-side: the links Worker stores
+the session in an `HttpOnly` cookie and adds the headers itself.
+
+Full request and response shapes are in the interactive reference at `/docs/`.
+
+### Sign-in
+
+1. `POST /artists/codes` `{ email, contest }` → `202`. Sends one email with a
+   6-digit code and, if the API key has a **sign-in link base**, a link to
+   `<signin_url>/signin?t=<token>`. Both work once and expire in 15 minutes.
+   A new code cancels the previous one. Same answer for new and known
+   addresses. Limits: 3 per address per 15 minutes (`429 too_many_codes`,
+   with `retryAfter` seconds).
+2. `POST /artists/sessions` with `{ email, code }` or `{ token }` → `201 { session,
+   expiresAt, artist, isNew }`. Wrong code: `400 invalid_code { attemptsLeft }`;
+   after 5 wrong codes `423 code_locked`; expired or used: `410 code_expired`.
+   The profile is created here (not when the code is sent), and earlier
+   one-shot submissions with the same email are linked to it. Sessions last
+   30 days and are extended while used.
+3. **Links take two steps.** Email scanners open links automatically, so the
+   link page must call `GET /artists/sessions/check?token=` (doesn't use it up)
+   and show a Continue button. Only the button calls `POST /artists/sessions`.
+4. `DELETE /artists/session` signs out on this device.
+
+Set the sign-in link base on the key in **Admin → API Keys** (e.g.
+`https://link.unblocked.world/form/test`). Without it, emails contain the code
+only.
+
+### Profile
+
+`GET /me` → `{ email, name, country, instagram, complete }`.
+`PATCH /me` `{ name?, country?, instagram? }`. Instagram is stored as a bare
+handle (`@Name` or `instagram.com/Name/` → `name`); anything else is
+`400 invalid_instagram`. The email can't change. Profile edits don't change
+entries already submitted, which keep a snapshot.
+
+### Entries
+
+| Call | What it does |
+| ---- | ------------ |
+| `GET /contests/:slug/me/entries` | Drafts, submitted and withdrawn entries, `earlierSubmissions`, `used`, `max`, and the contest |
+| `POST /contests/:slug/me/entries` `{ id, fields? }` | Start a draft. The client makes the UUID, so offline creates sync safely; a repeated id returns the existing entry |
+| `PATCH …/entries/:id` `{ fields }` + `If-Match: <version>` | Save changed fields. `409 version_conflict` (with the server's `entry`) if another device saved first; `409 entry_locked` if it's no longer a draft |
+| `PUT …/entries/:id/file` | Upload or replace the poster. Body = the file bytes, `X-File-Name` = URI-encoded name. Same type and size rules as above |
+| `GET` / `DELETE …/entries/:id/file` | Download it (for previews) / unlink it from the draft |
+| `POST …/entries/:id/assets`, `GET`/`DELETE …/assets/:assetId` | Supporting files, up to 3 |
+| `POST /contests/:slug/me/submissions` `{ entryIds, consentVersion }` | Submit ready drafts (title + poster file). Per-entry `reference` or `error`. One receipt email per call |
+| `POST …/entries/:id/submit` `{ consentVersion }` | Submit one draft. Submitting twice returns the same reference |
+| `POST …/entries/:id/withdraw` `{ reason? }` | Withdraw. Only while `withdrawalsOpen`; otherwise `409 withdrawals_closed` |
+| `POST …/entries/:id/restore` | Put a withdrawn entry back, same reference, while `acceptingSubmissions` |
+| `DELETE …/entries/:id` | Remove a draft (soft delete). Submitted entries use withdraw |
+
+Submit errors: `409 submissions_closed`, `409 consent_outdated` (with the
+current `consentVersion`), `422 profile_incomplete` (name and country are
+required), and per entry `entry_incomplete` (with `missing`) or
+`submission_limit_reached`.
+
+### What judges see
+
+Only entries that are submitted, not withdrawn and not disqualified are
+judged. A withdrawn entry disappears from the judge list, voting, results and
+the CSV, and judges can no longer open its files. Its row, files, votes and
+history are all kept. Nothing is ever deleted: removing a draft and
+withdrawing an entry only set a status and a date, and the database refuses
+deletes on submissions, entries and their history.
+
 ## Authentication note
 
 The judge/admin portal uses its own magic-link sessions; `/api/v1/*` never
-uses cookies or sessions — API keys are the only authentication on these
-routes.
+uses cookies — API keys (plus `X-Artist-Session` for artist calls) are the
+only authentication on these routes.

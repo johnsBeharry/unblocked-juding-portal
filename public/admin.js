@@ -11,7 +11,11 @@ const state = {
   newKey: null,           // raw key shown once after creation
   notice: null,
   compose: null,          // { userId, userEmail, subject, body, mode, sending }
-  activeDrawer: null,     // "new-contest" | "add-judge" | "add-user" | "create-key" | null
+  activeDrawer: null,     // "new-contest" | "edit-contest" | "add-judge" | "add-user" | "create-key" | "edit-key" | "reason" | "history" | null
+  submissionFilter: "active", // active | withdrawn | disqualified | all
+  reasonAction: null,     // { kind: "disqualify" | "withdraw", subId, title }
+  history: null,          // { title, publicId, events: [] }
+  editKey: null,          // key row being edited
   confirmAction: null,    // { heading, message, confirmLabel, action } | null
 };
 
@@ -93,6 +97,10 @@ function drawerMarkup() {
     case "add-judge": return addJudgeDrawerMarkup();
     case "add-user": return addUserDrawerMarkup();
     case "create-key": return createKeyDrawerMarkup();
+    case "edit-key": return editKeyDrawerMarkup();
+    case "edit-contest": return editContestDrawerMarkup();
+    case "reason": return reasonDrawerMarkup();
+    case "history": return historyDrawerMarkup();
     default: return "";
   }
 }
@@ -285,7 +293,7 @@ function contestsMarkup() {
             <div>
               <span class="a-section-tag">${esc(STATUS_LABELS[ct.status] || ct.status)}</span>
               <strong>${esc(ct.name)}</strong>
-              <p class="m-contest-row__meta">${ct.submission_count} submission${ct.submission_count === 1 ? "" : "s"} · ${ct.judge_count} judge${ct.judge_count === 1 ? "" : "s"} · <code>${esc(ct.slug)}</code></p>
+              <p class="m-contest-row__meta">${ct.submission_count} submission${ct.submission_count === 1 ? "" : "s"}${ct.draft_count ? ` · ${ct.draft_count} draft${ct.draft_count === 1 ? "" : "s"} in progress` : ""}${ct.withdrawn_count ? ` · ${ct.withdrawn_count} withdrawn` : ""} · ${ct.judge_count} judge${ct.judge_count === 1 ? "" : "s"} · <code>${esc(ct.slug)}</code></p>
             </div>
             <button class="a-action-trigger" type="button" data-open-contest="${ct.id}">(Manage)</button>
           </article>`).join("") || `<p class="a-workflow-note">No contests yet — create the first one below.</p>`}
@@ -323,19 +331,43 @@ function contestDetailMarkup() {
   const ct = d.contest;
   const majority = Math.floor(d.judges.length / 2) + 1;
 
-  const submissionRows = d.submissions.map((sub) => {
+  const filters = {
+    active: (sub) => !sub.withdrawn_at && sub.status === "submitted",
+    withdrawn: (sub) => Boolean(sub.withdrawn_at),
+    disqualified: (sub) => !sub.withdrawn_at && sub.status === "disqualified",
+    all: () => true,
+  };
+  const visible = d.submissions.filter(filters[state.submissionFilter] || filters.active);
+  const counts = d.counts || { active: 0, withdrawn: 0, disqualified: 0, drafts: 0 };
+  const filterTab = (key, label, n) => `<button type="button"
+    class="a-action-trigger${state.submissionFilter === key ? "" : " a-action-trigger--dim"}"
+    data-submission-filter="${key}" aria-pressed="${state.submissionFilter === key}">${esc(label)} (${n})</button>`;
+
+  const submissionRows = visible.map((sub) => {
     const thumb = sub.fileUrl && (sub.file_type || "").startsWith("image/")
       ? `<img src="${esc(sub.fileUrl)}" alt="" loading="lazy">`
       : `<span class="a-thumb-fallback">${esc((sub.file_type || "—").split("/")[1] || "—")}</span>`;
+    const withdrawn = Boolean(sub.withdrawn_at);
+    const inPool = !withdrawn && sub.status === "submitted";
+    const rowClass = withdrawn ? "is-withdrawn" : sub.status === "disqualified" ? "is-disqualified" : "";
+    const contact = [sub.artist_email, sub.instagram ? `@${sub.instagram}` : ""].filter(Boolean).join(" · ");
+    const badge = withdrawn
+      ? `<br><span class="a-status-chip">Withdrawn ${esc(formatDateTime(sqlTime(sub.withdrawn_at)))}${sub.withdrawn_by === "admin" ? " by staff" : ""}${sub.withdrawn_reason ? ` · ${esc(sub.withdrawn_reason)}` : ""}</span>`
+      : sub.status === "disqualified" ? `<br><span class="a-status-chip">Disqualified</span>` : "";
     return `
-      <tr class="${sub.status === "disqualified" ? "is-disqualified" : ""}">
+      <tr class="${rowClass}">
         <td class="cell-thumb">${sub.fileUrl ? `<a href="${esc(sub.fileUrl)}" target="_blank" rel="noopener">${thumb}</a>` : thumb}</td>
-        <td><strong>${esc(sub.title)}</strong><br><small>${esc(sub.public_id)} · ${esc([sub.artist_name, sub.country].filter(Boolean).join(", ") || "anonymous")}</small></td>
+        <td><strong>${esc(sub.title)}</strong><br><small>${esc(sub.public_id)} · ${esc([sub.artist_name, sub.country].filter(Boolean).join(", ") || "anonymous")}</small>
+          ${contact ? `<br><small>${esc(contact)}</small>` : ""}${badge}</td>
         <td>${sub.yes_votes} yes / ${sub.no_votes} no</td>
         <td>${sub.ratings_count}</td>
-        <td><label class="a-check-label"><input type="checkbox" data-advance-check value="${sub.id}" ${sub.advanced ? "checked" : ""} ${sub.status === "disqualified" ? "disabled" : ""}> R2</label></td>
-        <td><button class="a-action-trigger a-action-trigger--dim" type="button" data-toggle-dq="${sub.id}" data-current="${sub.status}">
-          ${sub.status === "disqualified" ? "Reinstate" : "Disqualify"}</button></td>
+        <td><label class="a-check-label"><input type="checkbox" data-advance-check value="${sub.id}" ${sub.advanced && inPool ? "checked" : ""} ${inPool ? "" : "disabled"}> R2</label></td>
+        <td class="cell-actions">
+          ${withdrawn ? "" : `<button class="a-action-trigger a-action-trigger--dim" type="button" data-toggle-dq="${sub.id}" data-current="${sub.status}">
+            ${sub.status === "disqualified" ? "Reinstate" : "Disqualify"}</button>`}
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-${withdrawn ? "restore-sub" : "withdraw-sub"}="${sub.id}">${withdrawn ? "Restore" : "Withdraw"}</button>
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-history="${sub.id}">History</button>
+        </td>
       </tr>`;
   }).join("");
 
@@ -362,9 +394,11 @@ function contestDetailMarkup() {
 
       <section class="o-section">
         <h2>Status</h2>
-        <p>Slug <code>${esc(ct.slug)}</code> — the external form submits to <code>/api/v1/contests/${esc(ct.slug)}/submissions</code>.</p>
+        <p>Slug <code>${esc(ct.slug)}</code>. Artists sign in and save drafts through <code>/api/v1/artists/*</code> and <code>/api/v1/contests/${esc(ct.slug)}/me/*</code>; other clients can still post to <code>/api/v1/contests/${esc(ct.slug)}/submissions</code>. See the <a href="/docs/" target="_blank" rel="noopener">API reference</a>.</p>
+        <p>${ct.closes_at ? `Closes <strong>${esc(formatDateTime(ct.closes_at))}</strong>` : "No closing date"} · ${ct.max_entries_per_artist ? `Up to <strong>${ct.max_entries_per_artist}</strong> entries per artist` : "No entry limit"}${ct.judging_started_at ? ` · Judging started ${esc(formatDateTime(ct.judging_started_at))} (artist withdrawals closed)` : ""}
+          <button class="a-action-trigger a-action-trigger--dim" type="button" data-open-drawer="edit-contest">Edit contest</button></p>
         ${stageNavInteractiveMarkup(ct)}
-        <p class="a-workflow-note">Moving to Round 2 requires at least one advanced submission. Judges only ever see the active stage.</p>
+        <p class="a-workflow-note">Moving to Round 2 requires at least one advanced submission. Judges only ever see the active stage, and only entries that are submitted, not withdrawn and not disqualified.</p>
       </section>
 
       <section class="o-section">
@@ -393,11 +427,17 @@ function contestDetailMarkup() {
       </section>
 
       <section class="o-section">
-        <h2>Submissions (${d.submissions.length})</h2>
+        <h2>Submissions (${counts.active} active${counts.withdrawn ? ` · ${counts.withdrawn} withdrawn` : ""}${counts.disqualified ? ` · ${counts.disqualified} disqualified` : ""}${counts.drafts ? ` · ${counts.drafts} draft${counts.drafts === 1 ? "" : "s"} in progress` : ""})</h2>
+        <div class="m-filter-tabs" role="group" aria-label="Filter submissions">
+          ${filterTab("active", "Active", counts.active)}
+          ${filterTab("withdrawn", "Withdrawn", counts.withdrawn)}
+          ${filterTab("disqualified", "Disqualified", counts.disqualified)}
+          ${filterTab("all", "All", d.submissions.length)}
+        </div>
         <div class="o-table-scroll">
           <table class="o-data-table">
             <thead><tr><th></th><th>Entry</th><th>Round 1 votes</th><th>Ratings</th><th>Advance</th><th></th></tr></thead>
-            <tbody>${submissionRows || `<tr><td colspan="6">No submissions yet — entries arrive via the external form API.</td></tr>`}</tbody>
+            <tbody>${submissionRows || `<tr><td colspan="6">${d.submissions.length ? "Nothing in this filter." : "No submissions yet. Entries arrive from the submission form."}</td></tr>`}</tbody>
           </table>
         </div>
         <div class="o-compose-form-actions">
@@ -416,6 +456,104 @@ function contestDetailMarkup() {
         </div>
       </section>
     </section>`;
+}
+
+/** SQLite datetime('now') text ("2026-11-08 14:02:11", UTC) → ISO. */
+function sqlTime(value) {
+  return /^\d{4}-\d\d-\d\d \d/.test(value || "") ? value.replace(" ", "T") + "Z" : value;
+}
+
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** ISO (UTC) → value for <input type="datetime-local"> in the viewer's time zone. */
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function editContestDrawerMarkup() {
+  const ct = state.contestDetail?.contest;
+  if (!ct) return "";
+  return `
+    <ub-drawer heading="Edit Contest">
+      <form data-edit-contest>
+        <label class="m-form-field">Name <input class="a-input-text" name="name" required maxlength="120" value="${esc(ct.name)}"></label>
+        <label class="m-form-field">Theme <input class="a-input-text" name="theme" maxlength="120" value="${esc(ct.theme)}"></label>
+        <label class="m-form-field is-wide">Description <textarea class="a-input-textarea" name="description" rows="3" maxlength="1000">${esc(ct.description)}</textarea></label>
+        <label class="m-form-field">Closing date (your time zone)
+          <input class="a-input-text" type="datetime-local" name="closesAt" value="${esc(toLocalInput(ct.closes_at))}">
+        </label>
+        <label class="m-form-field">Max entries per artist
+          <input class="a-input-text" type="number" name="maxEntriesPerArtist" min="1" max="100" placeholder="No limit" value="${ct.max_entries_per_artist ?? ""}">
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">Save contest</button>
+      </form>
+      <p class="a-workflow-note">Leave the closing date empty to keep submissions open until you move the contest to Round 1. The form shows the closing date to artists.</p>
+    </ub-drawer>`;
+}
+
+function reasonDrawerMarkup() {
+  const ra = state.reasonAction;
+  if (!ra) return "";
+  const copy = ra.kind === "withdraw"
+    ? { heading: "Withdraw Entry", note: "It leaves judging at once. Its votes and ratings stay in the database for the record but stop counting. You can restore it later.", button: "Withdraw entry" }
+    : { heading: "Disqualify Entry", note: "It's excluded from Round 1/Round 2 selection and results until reinstated.", button: "Disqualify entry" };
+  return `
+    <ub-drawer heading="${esc(copy.heading)}">
+      <form data-reason-form>
+        <p><strong>${esc(ra.title)}</strong></p>
+        <label class="m-form-field is-wide">Reason (optional, kept in the entry's history)
+          <textarea class="a-input-textarea" name="reason" rows="3" maxlength="500"></textarea>
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">${esc(copy.button)}</button>
+      </form>
+      <p class="a-workflow-note">${esc(copy.note)}</p>
+    </ub-drawer>`;
+}
+
+const EVENT_LABELS = {
+  created: "Draft started",
+  file_added: "File added",
+  file_replaced: "Poster file replaced",
+  file_removed: "File removed",
+  submitted: "Submitted",
+  withdrawn: "Withdrawn",
+  restored: "Restored",
+  discarded: "Draft removed",
+  disqualified: "Disqualified",
+  requalified: "Reinstated",
+  advanced: "Advanced to Round 2",
+  unadvanced: "Removed from Round 2",
+};
+
+function historyDrawerMarkup() {
+  const h = state.history;
+  if (!h) return "";
+  const rows = h.events.map((ev) => {
+    const who = ev.actor === "admin" ? (ev.actor_email || "staff") : ev.actor;
+    const detail = ev.detail?.asset ? " (supporting file)" : ev.detail?.name ? ` (${ev.detail.name})` : "";
+    return `<tr>
+      <td>${esc(formatDateTime(sqlTime(ev.created_at)))}</td>
+      <td>${esc((EVENT_LABELS[ev.type] || ev.type) + detail)}${ev.reason ? `<br><small>${esc(ev.reason)}</small>` : ""}</td>
+      <td>${esc(who)}</td>
+    </tr>`;
+  }).join("");
+  return `
+    <ub-drawer heading="History · ${esc(h.publicId)}">
+      <p><strong>${esc(h.title)}</strong></p>
+      <div class="o-table-scroll">
+        <table class="o-data-table">
+          <thead><tr><th>When</th><th>What</th><th>Who</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="3">No history recorded. Entries sent before artist accounts existed have no history.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </ub-drawer>`;
 }
 
 /* ---------- users + keys ---------- */
@@ -482,8 +620,28 @@ function createKeyDrawerMarkup() {
             ${state.contests.map((ct) => `<option value="${ct.id}">${esc(ct.name)}</option>`).join("")}
           </select>
         </label>
+        <label class="m-form-field is-wide">Sign-in link base (optional)
+          <input class="a-input-text" name="signinUrl" type="url" placeholder="https://link.unblocked.world/form/test">
+        </label>
         <button class="a-action-trigger a-action-trigger--primary" type="submit">(+) Create Key</button>
       </form>
+      <p class="a-workflow-note">The sign-in link base is the form's address. Artist sign-in emails link to it (…/signin) and receipts link back to it. Without it, artists get a code only.</p>
+    </ub-drawer>`;
+}
+
+function editKeyDrawerMarkup() {
+  const k = state.editKey;
+  if (!k) return "";
+  return `
+    <ub-drawer heading="Edit API Key">
+      <form data-edit-key-form>
+        <p><strong>${esc(k.name)}</strong> · ${esc(k.contest_slug || "All contests")}</p>
+        <label class="m-form-field is-wide">Sign-in link base
+          <input class="a-input-text" name="signinUrl" type="url" value="${esc(k.signin_url || "")}" placeholder="https://link.unblocked.world/form/test">
+        </label>
+        <button class="a-action-trigger a-action-trigger--primary" type="submit">Save</button>
+      </form>
+      <p class="a-workflow-note">Leave empty to send code-only sign-in emails.</p>
     </ub-drawer>`;
 }
 
@@ -506,16 +664,18 @@ function keysMarkup() {
       <section class="o-section">
         <div class="o-table-scroll">
           <table class="o-data-table">
-            <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Scope</th><th>Sign-in link base</th><th>Created</th><th>Status</th><th></th></tr></thead>
             <tbody>
               ${state.keys.map((k) => `
                 <tr>
                   <td>${esc(k.name)}</td>
                   <td>${esc(k.contest_slug || "All contests")}</td>
+                  <td>${k.signin_url ? `<code>${esc(k.signin_url)}</code>` : "<small>Code only</small>"}</td>
                   <td>${esc(k.created_at)}</td>
                   <td>${k.revoked_at ? "(Revoked)" : "(Active)"}</td>
-                  <td>${k.revoked_at ? "" : `<button class="a-action-trigger a-action-trigger--danger" type="button" data-revoke-key="${k.id}">Revoke</button>`}</td>
-                </tr>`).join("") || `<tr><td colspan="5">No API keys yet.</td></tr>`}
+                  <td>${k.revoked_at ? "" : `<button class="a-action-trigger a-action-trigger--dim" type="button" data-edit-key="${k.id}">Edit</button>
+                    <button class="a-action-trigger a-action-trigger--danger" type="button" data-revoke-key="${k.id}">Revoke</button>`}</td>
+                </tr>`).join("") || `<tr><td colspan="6">No API keys yet.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -556,6 +716,7 @@ async function openContest(id) {
     state.notice = "Couldn't load that contest.";
     return render();
   }
+  if (state.contestDetail?.contest.id !== res.body.contest.id) state.submissionFilter = "active";
   state.contestDetail = res.body;
   state.view = "contest";
   render();
@@ -601,9 +762,13 @@ document.addEventListener("click", async (event) => {
   if (statusButton) {
     const status = statusButton.dataset.setStatus;
     const ct = state.contestDetail.contest;
+    const counts = state.contestDetail.counts || {};
+    const backToOpen = status === "open" && ct.judging_started_at;
     askConfirm({
       heading: `Move to ${STATUS_LABELS[status]}?`,
-      message: `This changes what "${ct.name}" shows to its judging panel.`,
+      message: backToOpen
+        ? `Judging has already started${counts.votes ? ` and ${counts.votes} vote${counts.votes === 1 ? " has" : "s have"} been cast` : ""}. New entries can come in again, but artists still can't withdraw, and existing votes are kept.`
+        : `This changes what "${ct.name}" shows to its judging panel.`,
       confirmLabel: "( Confirm Stage Transition )",
       action: async () => {
         const res = await api(`/admin/contests/${ct.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
@@ -634,7 +799,65 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const filterButton = event.target.closest("[data-submission-filter]");
+  if (filterButton) {
+    state.submissionFilter = filterButton.dataset.submissionFilter;
+    render();
+    return;
+  }
+
+  const withdrawSub = event.target.closest("[data-withdraw-sub]");
+  if (withdrawSub) {
+    const sub = state.contestDetail.submissions.find((x) => x.id === Number(withdrawSub.dataset.withdrawSub));
+    state.reasonAction = { kind: "withdraw", subId: sub.id, title: `${sub.title} · ${sub.public_id}` };
+    state.activeDrawer = "reason";
+    render();
+    return;
+  }
+
+  const restoreSub = event.target.closest("[data-restore-sub]");
+  if (restoreSub) {
+    const subId = restoreSub.dataset.restoreSub;
+    askConfirm({
+      heading: "Restore this entry?",
+      message: "It goes back into the judging pool with the same reference, and its earlier votes count again.",
+      confirmLabel: "( Confirm Restore )",
+      action: async () => {
+        const res = await api(`/admin/submissions/${subId}/restore`, { method: "POST", body: "{}" });
+        if (!res.ok) state.notice = "Couldn't restore that entry.";
+        return openContest(state.contestDetail.contest.id);
+      },
+    });
+    return;
+  }
+
+  const historyButton = event.target.closest("[data-history]");
+  if (historyButton) {
+    const sub = state.contestDetail.submissions.find((x) => x.id === Number(historyButton.dataset.history));
+    const res = await api(`/admin/submissions/${sub.id}/events`);
+    if (!res.ok) { state.notice = "Couldn't load the history."; return render(); }
+    state.history = { title: sub.title, publicId: sub.public_id, events: res.body.events };
+    state.activeDrawer = "history";
+    render();
+    return;
+  }
+
+  const editKeyButton = event.target.closest("[data-edit-key]");
+  if (editKeyButton) {
+    state.editKey = state.keys.find((k) => k.id === Number(editKeyButton.dataset.editKey));
+    state.activeDrawer = "edit-key";
+    render();
+    return;
+  }
+
   const toggleDq = event.target.closest("[data-toggle-dq]");
+  if (toggleDq && toggleDq.dataset.current !== "disqualified") {
+    const sub = state.contestDetail.submissions.find((x) => x.id === Number(toggleDq.dataset.toggleDq));
+    state.reasonAction = { kind: "disqualify", subId: sub.id, title: `${sub.title} · ${sub.public_id}` };
+    state.activeDrawer = "reason";
+    render();
+    return;
+  }
   if (toggleDq) {
     const disqualifying = toggleDq.dataset.current !== "disqualified";
     const next = disqualifying ? "disqualified" : "submitted";
@@ -658,7 +881,8 @@ document.addEventListener("click", async (event) => {
     const byId = new Map(state.contestDetail.submissions.map((s) => [String(s.id), s]));
     document.querySelectorAll("[data-advance-check]").forEach((box) => {
       const sub = byId.get(box.value);
-      if (sub && sub.status === "submitted") box.checked = sub.yes_votes >= majority;
+      // Withdrawn and disqualified rows are never preselected.
+      if (sub && sub.status === "submitted" && !sub.withdrawn_at) box.checked = sub.yes_votes >= majority;
     });
     return;
   }
@@ -815,6 +1039,62 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
+  const editContest = event.target.closest("[data-edit-contest]");
+  if (editContest) {
+    event.preventDefault();
+    const data = new FormData(editContest);
+    const ct = state.contestDetail.contest;
+    const closesLocal = String(data.get("closesAt") || "");
+    const res = await api(`/admin/contests/${ct.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: data.get("name"),
+        theme: data.get("theme"),
+        description: data.get("description"),
+        // datetime-local is the viewer's local time; send it as UTC ISO.
+        closesAt: closesLocal ? new Date(closesLocal).toISOString() : null,
+        maxEntriesPerArtist: data.get("maxEntriesPerArtist") ? Number(data.get("maxEntriesPerArtist")) : null,
+      }),
+    });
+    if (!res.ok) {
+      state.notice = res.body?.error === "invalid_max_entries" ? "Max entries must be a whole number from 1 to 100." : "Couldn't save the contest.";
+      return render();
+    }
+    state.activeDrawer = null;
+    state.notice = "Contest saved.";
+    return openContest(ct.id);
+  }
+
+  const reasonForm = event.target.closest("[data-reason-form]");
+  if (reasonForm) {
+    event.preventDefault();
+    const ra = state.reasonAction;
+    const reason = String(new FormData(reasonForm).get("reason") || "").trim();
+    const res = ra.kind === "withdraw"
+      ? await api(`/admin/submissions/${ra.subId}/withdraw`, { method: "POST", body: JSON.stringify({ reason }) })
+      : await api(`/admin/submissions/${ra.subId}/status`, { method: "POST", body: JSON.stringify({ status: "disqualified", reason }) });
+    state.activeDrawer = null;
+    state.reasonAction = null;
+    if (!res.ok) state.notice = "That change didn't save.";
+    return openContest(state.contestDetail.contest.id);
+  }
+
+  const editKey = event.target.closest("[data-edit-key-form]");
+  if (editKey) {
+    event.preventDefault();
+    const res = await api(`/admin/keys/${state.editKey.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ signinUrl: new FormData(editKey).get("signinUrl") }),
+    });
+    if (!res.ok) {
+      state.notice = res.body?.error === "invalid_signin_url" ? "Use a full https:// address with no ? or #." : "Couldn't save the key.";
+      return render();
+    }
+    state.activeDrawer = null;
+    state.editKey = null;
+    return switchView("keys");
+  }
+
   const createKey = event.target.closest("[data-create-key]");
   if (createKey) {
     event.preventDefault();
@@ -824,10 +1104,11 @@ document.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         name: data.get("name"),
         contestId: data.get("contestId") ? Number(data.get("contestId")) : null,
+        signinUrl: data.get("signinUrl") || null,
       }),
     });
     if (res.ok) state.newKey = res.body.key;
-    else state.notice = "Couldn't create the key.";
+    else state.notice = res.body?.error === "invalid_signin_url" ? "Use a full https:// address for the sign-in link base." : "Couldn't create the key.";
     state.activeDrawer = null;
     return switchView("keys");
   }

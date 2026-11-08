@@ -82,8 +82,8 @@ export async function verifyUnsubscribeToken(env: Env, email: string, token: str
 
 export async function sendEmail(
   env: Env,
-  opts: { to: string; subject: string; html: string },
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  opts: { to: string; subject: string; html: string; from?: string },
+): Promise<{ ok: true; id?: string } | { ok: false; error: string }> {
   if (!env.RESEND_API_KEY) return { ok: false, error: "email_not_configured" };
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -93,7 +93,7 @@ export async function sendEmail(
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      from: env.MAIL_FROM || "UNBLOCKED Judging <onboarding@resend.dev>",
+      from: opts.from || env.MAIL_FROM || "UNBLOCKED Judging <onboarding@resend.dev>",
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,
@@ -104,5 +104,6 @@ export async function sendEmail(
     console.error("resend_error", res.status, await res.text().catch(() => ""));
     return { ok: false, error: `resend_${res.status}` };
   }
-  return { ok: true };
+  const sent = (await res.json().catch(() => null)) as { id?: string } | null;
+  return { ok: true, id: sent?.id };
 }

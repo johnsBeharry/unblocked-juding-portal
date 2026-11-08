@@ -1,10 +1,11 @@
 openapi: 3.0.3
 info:
   title: UNBLOCKED Judging Portal — External Submission API
-  version: "1.0.0"
+  version: "1.1.0"
   description: |
-    Lets the external submission system push poster entries into the judging
-    portal. The submission form itself is **not** part of this repository.
+    Lets the submission form push poster entries into the judging portal, and
+    lets artists sign in, save drafts and come back to submit more. The form
+    itself is **not** part of this repository (it runs on link.unblocked.world).
 
     **Authentication.** Write requests need an API key created in the admin
     console (**Admin → API Keys**). Keys look like `ubk_…`, are shown once at
@@ -13,14 +14,26 @@ info:
     never ship one in client-side JavaScript.
 
     **Contest lifecycle.** A contest only accepts submissions while its status is
-    `open` (`draft → open → round1 → round2 → deliberation → complete → archived`).
+    `open` (`draft → open → round1 → round2 → deliberation → complete → archived`)
+    and before its closing date, if it has one.
+
+    **Artist sessions.** Endpoints tagged *Artist* also need `X-Artist-Session`:
+    the token returned by `POST /artists/sessions`. It's only accepted together
+    with a valid API key, so the client holding it must be a server (the links
+    Worker keeps it in an HttpOnly cookie and adds both headers).
+
+    **Nothing is deleted.** Removing a draft and withdrawing an entry set a
+    status and a timestamp. Every change is recorded in the entry's history.
+    Only entries that are submitted, not withdrawn and not disqualified reach
+    the judges.
 
     **Test requests.** Open an operation, enter a key under *Authentication*,
     and press *Test Request*. Requests go to this same server and **create real
     data** — use a test contest.
 
-    **Rate limiting.** Add a Cloudflare WAF rule on `POST /api/v1/*`
-    (e.g. 10 requests/minute/IP).
+    **Rate limiting.** Sign-in codes are limited to 3 per email address per
+    15 minutes by the portal. Limit by IP in front of the portal (the links
+    Worker allows 5 code requests per minute per IP), or add a WAF rule.
 
     Prose version of these docs: [`/docs/external-api.md`](/docs/external-api.md).
 servers:
@@ -31,7 +44,11 @@ tags:
   - name: Contests
     description: Read contest state (public).
   - name: Submissions
-    description: Push poster entries (API key required).
+    description: Push a finished poster entry in one request (API key required).
+  - name: Artist sign-in
+    description: Passwordless sign-in with a 6-digit code or an emailed link.
+  - name: Artist
+    description: The signed-in artist's profile and entries (API key + X-Artist-Session).
 
 paths:
   /contests/{slug}:
@@ -58,6 +75,10 @@ paths:
                 theme: Ownership
                 description: "…"
                 acceptingSubmissions: true
+                closesAt: "2027-01-31T23:59:00.000Z"
+                maxEntriesPerArtist: 5
+                withdrawalsOpen: true
+                consentVersion: "2026-11-08"
         "404":
           description: Unknown slug, or the contest is archived.
           content:
@@ -87,7 +108,10 @@ paths:
         goes offline, the submission is unaffected. `assets` are upload-only.
 
         Keep the returned `id` — it is the entry's public reference in the
-        judging portal. There is no public status endpoint.
+        judging portal. Entries sent this way aren't tied to an artist account
+        until that email address signs in; they then show in the artist's list
+        as read-only. To save drafts and let artists withdraw, use the *Artist*
+        endpoints instead.
       parameters:
         - $ref: "#/components/parameters/Slug"
       security:
@@ -151,7 +175,7 @@ paths:
               example:
                 error: not_found
         "409":
-          description: The contest is not accepting submissions.
+          description: The contest is not accepting submissions (not open, or past its closing date).
           content:
             application/json:
               schema:
@@ -186,6 +210,636 @@ paths:
                 unsupported_asset_type:
                   value: { error: unsupported_asset_type, asset: extra.bin }
 
+  /artists/codes:
+    post:
+      tags: [Artist sign-in]
+      operationId: requestArtistCode
+      summary: Email a sign-in code and link
+      description: |
+        Sends one email with a 6-digit code and (if the API key has a sign-in
+        link base) a one-click link. Both work once and expire after 15
+        minutes. A new code cancels any older unused one. The answer is the
+        same whether or not the address has entered before. No profile is
+        created until the code is verified.
+      security:
+        - BearerKey: []
+        - ApiKeyHeader: []
+      parameters:
+        - $ref: "#/components/parameters/ClientIp"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, contest]
+              properties:
+                email: { type: string, format: email, example: ana@studio.com }
+                contest: { type: string, description: "Contest slug the key is valid for.", example: test-november }
+      responses:
+        "202":
+          description: Email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  expiresInSeconds: { type: integer, example: 900 }
+                  resendAfterSeconds: { type: integer, example: 30 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/InvalidKey" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429":
+          description: More than 3 codes for this address in 15 minutes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: too_many_codes, retryAfter: 612 }
+        "502":
+          description: The email couldn't be sent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: email_failed }
+
+  /artists/sessions:
+    post:
+      tags: [Artist sign-in]
+      operationId: createArtistSession
+      summary: Verify a code or link token and start a session
+      description: |
+        Send `{ email, code }` (typed code) or `{ token }` (from the emailed
+        link). Five wrong codes lock that code. On success, the artist's
+        profile is created if it's their first time, and earlier submissions
+        made with the same address are linked to it. The session lasts 30
+        days and is extended while in use. Store `session` server-side.
+      security:
+        - BearerKey: []
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [email, code]
+                  properties:
+                    email: { type: string, format: email }
+                    code: { type: string, pattern: "^[0-9]{6}$", example: "481027" }
+                - type: object
+                  required: [token]
+                  properties:
+                    token: { type: string, description: "The `t` value from the emailed link." }
+      responses:
+        "201":
+          description: Signed in.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string, description: "Raw session token. Send it as X-Artist-Session." }
+                  expiresAt: { type: string, example: "2026-12-08 14:02:11" }
+                  artist: { $ref: "#/components/schemas/Profile" }
+                  isNew: { type: boolean }
+        "400":
+          description: Wrong code.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: invalid_code, attemptsLeft: 3 }
+        "401": { $ref: "#/components/responses/InvalidKey" }
+        "410":
+          description: No valid code (expired, used, or replaced by a newer one).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: code_expired }
+        "423":
+          description: Too many wrong tries. Request a new code.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: code_locked }
+
+  /artists/sessions/check:
+    get:
+      tags: [Artist sign-in]
+      operationId: checkArtistLink
+      summary: Check a sign-in link without using it
+      description: |
+        For the link's confirm page. Email scanners open links automatically,
+        so opening the link must not sign anyone in. Show a Continue button,
+        and only call `POST /artists/sessions` with `{ token }` when it's pressed.
+      security:
+        - BearerKey: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The link is valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email: { type: string, format: email }
+        "410":
+          description: Expired or used.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: code_expired }
+
+  /artists/session:
+    delete:
+      tags: [Artist sign-in]
+      operationId: deleteArtistSession
+      summary: Sign out on this device
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "204": { description: Signed out. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /me:
+    get:
+      tags: [Artist]
+      operationId: getProfile
+      summary: The signed-in artist's profile
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: Profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    patch:
+      tags: [Artist]
+      operationId: updateProfile
+      summary: Update name, country or Instagram
+      description: |
+        Partial update. Instagram is stored as a bare handle: `@Name` and
+        `instagram.com/Name/` become `name`; an empty string removes it. The
+        email can't be changed (signing in with another address gives a
+        separate profile). Changes don't affect entries already submitted.
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 200 }
+                country: { type: string, maxLength: 100 }
+                instagram: { type: string, example: "@ana.ruiz.studio" }
+      responses:
+        "200":
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "400":
+          description: Not a valid Instagram handle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: invalid_instagram }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /contests/{slug}/me/entries:
+    get:
+      tags: [Artist]
+      operationId: listEntries
+      summary: The artist's entries in this contest
+      description: |
+        Drafts, submitted and withdrawn entries (removed drafts are left out),
+        plus posters sent before artist accounts existed (`earlierSubmissions`,
+        read-only). `used` counts active submissions towards `max`.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: Entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries: { type: array, items: { $ref: "#/components/schemas/Entry" } }
+                  earlierSubmissions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        reference: { type: string }
+                        title: { type: string }
+                        status: { type: string, enum: [submitted, withdrawn] }
+                        submittedAt: { type: string }
+                        withdrawnAt: { type: string, nullable: true }
+                  used: { type: integer, example: 2 }
+                  max: { type: integer, nullable: true, example: 5 }
+                  contest: { $ref: "#/components/schemas/Contest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      tags: [Artist]
+      operationId: createEntry
+      summary: Start a draft
+      description: |
+        The client makes the id (a UUID), so drafts can be created offline and
+        synced later. Sending the same id again returns the existing entry
+        (200) instead of making a duplicate.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string, format: uuid }
+                fields: { $ref: "#/components/schemas/EntryFields" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { type: object, properties: { entry: { $ref: "#/components/schemas/Entry" } } }
+        "200":
+          description: Already existed (replayed create).
+          content:
+            application/json:
+              schema: { type: object, properties: { entry: { $ref: "#/components/schemas/Entry" } } }
+        "409":
+          description: "`submissions_closed`, `too_many_drafts` (50), or `entry_id_taken`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /contests/{slug}/me/entries/{id}:
+    patch:
+      tags: [Artist]
+      operationId: updateEntry
+      summary: Save draft fields (partial)
+      description: |
+        Send only the fields that changed, with `If-Match: <version>`. If
+        another device saved first you get `409 version_conflict` with the
+        server's copy, so you can merge or ask the artist. Only drafts can be
+        changed.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: integer, example: 3 }
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fields: { $ref: "#/components/schemas/EntryFields" }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: integer }
+                  entry: { $ref: "#/components/schemas/Entry" }
+        "409":
+          description: "`version_conflict` or `entry_locked` (not a draft). Both include `entry`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "428":
+          description: If-Match missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: if_match_required }
+    delete:
+      tags: [Artist]
+      operationId: discardEntry
+      summary: Remove a draft (soft delete)
+      description: Sets the draft's status to `discarded`. It's kept for statistics. Submitted entries use withdraw instead.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200": { description: Removed. }
+        "409":
+          description: Not a draft.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: entry_locked }
+
+  /contests/{slug}/me/entries/{id}/file:
+    put:
+      tags: [Artist]
+      operationId: uploadEntryFile
+      summary: Upload or replace the poster file
+      description: |
+        The request body is the file itself (not multipart). Send the original
+        file name, URI-encoded, in `X-File-Name`. Type is detected from the
+        bytes: JPG/PNG/PDF up to 5 MB, GIF/MP4 up to 20 MB. A replaced file is
+        kept in storage and logged.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+        - $ref: "#/components/parameters/FileName"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: "#/components/schemas/FileInfo" }
+                  version: { type: integer }
+                  entry: { $ref: "#/components/schemas/Entry" }
+        "409": { $ref: "#/components/responses/Locked" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/BadType" }
+    get:
+      tags: [Artist]
+      operationId: getEntryFile
+      summary: Download the poster file (for previews)
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: The file.
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Artist]
+      operationId: removeEntryFile
+      summary: Unlink the poster file from a draft
+      description: The file stays in storage.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: "Removed. Returns `{ version, entry }`."
+        "409": { $ref: "#/components/responses/Locked" }
+
+  /contests/{slug}/me/entries/{id}/assets:
+    post:
+      tags: [Artist]
+      operationId: addEntryAsset
+      summary: Add a supporting file (up to 3)
+      description: Same body, header and file rules as the poster upload.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+        - $ref: "#/components/parameters/FileName"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "201":
+          description: Added. Returns `{ asset, assets, version, entry }`.
+        "409":
+          description: "`too_many_assets` or `entry_locked`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/BadType" }
+
+  /contests/{slug}/me/entries/{id}/assets/{assetId}:
+    get:
+      tags: [Artist]
+      operationId: getEntryAsset
+      summary: Download a supporting file
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+        - $ref: "#/components/parameters/AssetId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: The file.
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+    delete:
+      tags: [Artist]
+      operationId: removeEntryAsset
+      summary: Unlink a supporting file
+      description: The file stays in storage.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+        - $ref: "#/components/parameters/AssetId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: "Removed. Returns `{ assets, version, entry }`."
+        "409": { $ref: "#/components/responses/Locked" }
+
+  /contests/{slug}/me/submissions:
+    post:
+      tags: [Artist]
+      operationId: submitEntries
+      summary: Submit one or more ready drafts
+      description: |
+        Each entry needs a title and a poster file. Its files are copied to
+        the judging store and a submission is created with a snapshot of the
+        artist's name, email, country and Instagram. Submitting an entry
+        twice returns the same reference. One receipt email is sent per call.
+        `consentVersion` must match the contest's current `consentVersion`.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entryIds, consentVersion]
+              properties:
+                entryIds: { type: array, items: { type: string, format: uuid } }
+                consentVersion: { type: string, example: "2026-11-08" }
+      responses:
+        "200":
+          description: Results per entry. Each has `reference`, or `error` (`entry_incomplete` with `missing`, `submission_limit_reached`, `entry_locked`, `not_found`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        reference: { type: string, example: TES-21CE47 }
+                        alreadySubmitted: { type: boolean }
+                        error: { type: string }
+                        missing: { type: array, items: { type: string, enum: [title, file] } }
+                  used: { type: integer }
+                  max: { type: integer, nullable: true }
+        "409":
+          description: "`submissions_closed` or `consent_outdated` (with the current `consentVersion`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The artist's name or country is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: profile_incomplete }
+
+  /contests/{slug}/me/entries/{id}/submit:
+    post:
+      tags: [Artist]
+      operationId: submitEntry
+      summary: Submit one draft
+      description: Same as the multi-entry submit, for one entry. 201 the first time, 200 with the same reference after that.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consentVersion]
+              properties:
+                consentVersion: { type: string }
+      responses:
+        "201":
+          description: Submitted.
+          content:
+            application/json:
+              schema: { type: object, properties: { reference: { type: string } } }
+        "200":
+          description: Already submitted; same reference.
+        "409":
+          description: "`submissions_closed`, `consent_outdated`, `submission_limit_reached` or `entry_locked`."
+        "422":
+          description: "`entry_incomplete` (with `missing`) or `profile_incomplete`."
+
+  /contests/{slug}/me/entries/{id}/withdraw:
+    post:
+      tags: [Artist]
+      operationId: withdrawEntry
+      summary: Withdraw a submitted entry
+      description: |
+        Takes the entry out of judging. Its row, files, votes and history are
+        kept. Allowed only while the contest is open and judging has never
+        started; after that, organisers can withdraw it from the admin console.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Withdrawn. Returns `{ entry }`.
+        "409":
+          description: "`withdrawals_closed` or `entry_locked`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: withdrawals_closed }
+
+  /contests/{slug}/me/entries/{id}/restore:
+    post:
+      tags: [Artist]
+      operationId: restoreEntry
+      summary: Restore a withdrawn entry
+      description: Puts it back into judging with the same reference, while submissions are open. Counts towards the entry limit.
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+        - $ref: "#/components/parameters/EntryId"
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: Restored. Returns `{ entry }`.
+        "409":
+          description: "`submissions_closed`, `submission_limit_reached` or `entry_locked`."
+
 components:
   parameters:
     Slug:
@@ -196,6 +850,72 @@ components:
       schema:
         type: string
         example: test-november
+    EntryId:
+      name: id
+      in: path
+      required: true
+      description: Entry id (UUID made by the client).
+      schema: { type: string, format: uuid }
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema: { type: string, example: 9f2c41ab }
+    FileName:
+      name: X-File-Name
+      in: header
+      required: true
+      description: Original file name, URI-encoded.
+      schema: { type: string, example: Ana_Who%20Owns.png }
+    ClientIp:
+      name: X-Client-IP
+      in: header
+      required: false
+      description: The artist's IP, set by a trusted server in front of the portal. Stored for the record.
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidKey:
+      description: Missing, unknown, revoked, or wrong-contest API key.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: invalid_api_key }
+    Unauthenticated:
+      description: Missing or expired X-Artist-Session (or invalid API key).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unauthenticated }
+    NotFound:
+      description: Not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: not_found }
+    Locked:
+      description: The entry isn't a draft any more.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: entry_locked }
+    TooLarge:
+      description: File too large.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: file_too_large, limitBytes: 5242880 }
+    BadType:
+      description: Not a JPG, PNG, PDF, GIF or MP4.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unsupported_file_type, accepted: [jpg, png, gif, pdf, mp4] }
 
   securitySchemes:
     BearerKey:
@@ -207,6 +927,11 @@ components:
       in: header
       name: X-Api-Key
       description: "Alternative: API key (`ubk_…`) in the `X-Api-Key` header."
+    ArtistSession:
+      type: apiKey
+      in: header
+      name: X-Artist-Session
+      description: "Session token from `POST /artists/sessions`. Only accepted together with a valid API key."
 
   schemas:
     Contest:
@@ -219,7 +944,82 @@ components:
         description: { type: string }
         acceptingSubmissions:
           type: boolean
-          description: True only while the contest status is `open`.
+          description: True while the contest status is `open` and before `closesAt`.
+        closesAt:
+          type: string
+          nullable: true
+          description: Closing date and time (ISO 8601, UTC), or null for none.
+        maxEntriesPerArtist:
+          type: integer
+          nullable: true
+          description: Active submissions allowed per artist, or null for no limit.
+        withdrawalsOpen:
+          type: boolean
+          description: True while open and before judging has ever started.
+        consentVersion:
+          type: string
+          description: Version of the submission terms. Send it back when submitting.
+
+    Profile:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        name: { type: string }
+        country: { type: string }
+        instagram: { type: string, description: "Handle without @, or empty." }
+        complete: { type: boolean, description: Name and country are filled in. }
+
+    EntryFields:
+      type: object
+      description: Any subset of the poster fields.
+      properties:
+        title: { type: string, maxLength: 200 }
+        concept: { type: string, maxLength: 4000 }
+        year_designed: { type: string, maxLength: 500 }
+        designed_for: { type: string, maxLength: 500 }
+        client_name: { type: string, maxLength: 500 }
+        creation_method: { type: string, maxLength: 500 }
+        materials_used: { type: string, maxLength: 500 }
+        digital_programs: { type: string, maxLength: 500 }
+        printing_method: { type: string, maxLength: 500 }
+
+    FileInfo:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, example: image/png }
+        size: { type: integer }
+
+    Entry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, submitted, withdrawn] }
+        version: { type: integer, description: "Send as If-Match when saving." }
+        fields: { $ref: "#/components/schemas/EntryFields" }
+        file:
+          type: object
+          nullable: true
+          description: The poster file, or null.
+          properties:
+            name: { type: string }
+            type: { type: string }
+            size: { type: integer }
+        assets:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/FileInfo"
+              - type: object
+                properties:
+                  id: { type: string }
+        reference: { type: string, nullable: true, example: TES-21CE47 }
+        ready: { type: boolean, description: A draft with a title and a poster file. }
+        missing: { type: array, items: { type: string, enum: [title, file] } }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        submittedAt: { type: string, nullable: true }
+        withdrawnAt: { type: string, nullable: true }
 
     SubmissionForm:
       type: object

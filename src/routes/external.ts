@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { AppEnv, ContestRow } from "../types";
 import { publicSubmissionId, sha256Hex } from "../util";
+import { MAX_ASSETS, MOTION_LIMIT, detectFileType } from "../files";
+import { acceptingSubmissions, publicContest } from "../contest";
 
 /**
  * Public API for the external submission system (spice-lake figma site).
@@ -10,22 +12,7 @@ import { publicSubmissionId, sha256Hex } from "../util";
  */
 export const external = new Hono<AppEnv>();
 
-const STATIC_LIMIT = 5 * 1024 * 1024; // jpg/png/pdf
-const MOTION_LIMIT = 20 * 1024 * 1024; // gif/mp4
-const MAX_ASSETS = 3;
 const IMAGE_URL_FETCH_TIMEOUT_MS = 15_000;
-
-type Detected = { mime: string; ext: string; limit: number };
-
-function detectFileType(bytes: Uint8Array): Detected | null {
-  const startsWith = (sig: number[], offset = 0) => sig.every((b, i) => bytes[offset + i] === b);
-  if (startsWith([0xff, 0xd8, 0xff])) return { mime: "image/jpeg", ext: "jpg", limit: STATIC_LIMIT };
-  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return { mime: "image/png", ext: "png", limit: STATIC_LIMIT };
-  if (startsWith([0x47, 0x49, 0x46, 0x38])) return { mime: "image/gif", ext: "gif", limit: MOTION_LIMIT };
-  if (startsWith([0x25, 0x50, 0x44, 0x46])) return { mime: "application/pdf", ext: "pdf", limit: STATIC_LIMIT };
-  if (startsWith([0x66, 0x74, 0x79, 0x70], 4)) return { mime: "video/mp4", ext: "mp4", limit: MOTION_LIMIT };
-  return null;
-}
 
 async function authenticateKey(c: Context<AppEnv>, contestId: number): Promise<boolean> {
   const header = c.req.header("authorization") || "";
@@ -42,19 +29,11 @@ async function authenticateKey(c: Context<AppEnv>, contestId: number): Promise<b
 }
 
 external.get("/contests/:slug", async (c) => {
-  const contest = await c.env.DB.prepare(
-    "SELECT id, slug, name, theme, description, status FROM contests WHERE slug = ?",
-  )
+  const contest = await c.env.DB.prepare("SELECT * FROM contests WHERE slug = ?")
     .bind(c.req.param("slug"))
     .first<ContestRow>();
   if (!contest || contest.status === "archived") return c.json({ error: "not_found" }, 404);
-  return c.json({
-    slug: contest.slug,
-    name: contest.name,
-    theme: contest.theme,
-    description: contest.description,
-    acceptingSubmissions: contest.status === "open",
-  });
+  return c.json(publicContest(contest));
 });
 
 external.post("/contests/:slug/submissions", async (c) => {
@@ -66,7 +45,7 @@ external.post("/contests/:slug/submissions", async (c) => {
   if (!(await authenticateKey(c, contest.id))) {
     return c.json({ error: "invalid_api_key" }, 401);
   }
-  if (contest.status !== "open") {
+  if (!acceptingSubmissions(contest)) {
     return c.json({ error: "submissions_closed", status: contest.status }, 409);
   }
 

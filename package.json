@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "types": "tsc --noEmit",
+    "check": "tsc --noEmit && node scripts/check-judging-pool.mjs",
     "migrate:local": "wrangler d1 migrations apply unblocked-judging --local",
     "migrate:remote": "wrangler d1 migrations apply unblocked-judging --remote",
     "ladle:serve": "ladle serve",

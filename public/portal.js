@@ -410,6 +410,7 @@ function roundTwoMarkup() {
               <div class="o-designer-summary">
                 <p><span>Name</span><strong>${esc(sub.artistName || "—")}</strong></p>
                 <p><span>Country</span><strong>${esc(sub.country || "—")}</strong></p>
+                ${sub.instagram ? `<p><span>Instagram</span><strong>@${esc(sub.instagram)}</strong></p>` : ""}
                 ${metaRows.map(([label, value]) => `<p><span>${esc(label)}</span><strong>${esc(value)}</strong></p>`).join("")}
               </div>
             </div>

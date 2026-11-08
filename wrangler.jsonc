@@ -35,8 +35,14 @@
 		// Comma-separated emails auto-provisioned as admins on first sign-in.
 		"ADMIN_EMAILS": "team@peakshift.com",
 		// Sender for sign-in emails, using the verified mail.pxpush.com domain.
-		"MAIL_FROM": "UNBLOCKED Judging <judging@mail.pxpush.com>"
-		// RESEND_API_KEY is a secret: npx wrangler secret put RESEND_API_KEY
+		"MAIL_FROM": "UNBLOCKED Judging <judging@mail.pxpush.com>",
+		// Sender for artist emails (sign-in code, receipt, withdrawal confirmation).
+		"MAIL_FROM_ARTISTS": "UNBLOCKED <submissions@mail.pxpush.com>"
+		// Secrets (npx wrangler secret put <NAME>):
+		//   RESEND_API_KEY      Resend API key
+		//   ARTIST_CODE_SECRET  random 32+ bytes; HMACs artist sign-in codes
+		// Local only (.dev.vars): ARTIST_EMAIL_MODE=log prints artist emails
+		// to the console instead of sending them.
 	},
 	"observability": {
 		"enabled": true

@@ -1348,6 +1348,23 @@ ub-criteria-bar {
   text-decoration: line-through;
 }
 
+/* Withdrawn entries: dimmed like disqualified, but not struck through —
+   the artist removed it, nobody ruled it out. */
+.o-data-table tr.is-withdrawn td {
+  color: var(--color-text-dim);
+}
+
+.o-data-table .cell-actions {
+  white-space: nowrap;
+}
+
+.m-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
 .o-data-table .cell-thumb img {
   display: block;
   width: 44px;

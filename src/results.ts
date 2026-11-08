@@ -14,7 +14,7 @@ export type ResultRow = {
 
 /**
  * Aggregates Round 2 ratings across the panel for a contest's advanced
- * submissions. Average = mean of every criterion score from every judge.
+ * submissions in the judging pool (withdrawn and disqualified rows excluded). Average = mean of every criterion score from every judge.
  */
 export async function computeResults(
   env: Env,
@@ -22,15 +22,15 @@ export async function computeResults(
   criteria: string[],
 ): Promise<ResultRow[]> {
   const subs = await env.DB.prepare(
-    "SELECT * FROM submissions WHERE contest_id = ? AND advanced = 1 AND status = 'submitted'",
+    "SELECT * FROM judging_pool WHERE contest_id = ? AND advanced = 1",
   )
     .bind(contestId)
     .all<SubmissionRow>();
 
   const ratings = await env.DB.prepare(
     `SELECT r.submission_id, r.ratings FROM round2_ratings r
-     JOIN submissions s ON s.id = r.submission_id
-     WHERE s.contest_id = ? AND s.advanced = 1 AND s.status = 'submitted'`,
+     JOIN judging_pool s ON s.id = r.submission_id
+     WHERE s.contest_id = ? AND s.advanced = 1`,
   )
     .bind(contestId)
     .all<{ submission_id: number; ratings: string }>();
