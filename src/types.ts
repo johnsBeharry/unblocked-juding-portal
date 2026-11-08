@@ -89,6 +89,10 @@ export type ArtistRow = {
   name: string;
   country: string;
   instagram: string;
+  bio: string;
+  photo_key: string | null;
+  terms_version: string | null;
+  terms_accepted_at: string | null;
   created_at: string;
   updated_at: string;
   last_seen_at: string | null;

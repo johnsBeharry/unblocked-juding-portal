@@ -54,8 +54,17 @@ hidden until Round 2). Advancement to Round 2 is picked in the admin console
   5 wrong tries, and are limited to 3 per address per 15 minutes. Links use
   the same two-step confirm as judge links, so mail scanners can't use them up.
   Sessions last 30 days. Artist tables and sessions are separate from judges.
-- **Profile:** email, name, country and Instagram (optional). Submissions copy
-  these at the moment they're sent, so later edits don't change what judges saw.
+- **Account:** created from the form's first step. The details typed there
+  (name, country, Instagram, bio, photo, agreement to the Terms of Service and
+  Privacy Policy) travel with the code request and are saved when the email
+  is verified, by code or by link, in any browser. Existing accounts only get
+  empty fields filled, so a code requested for someone else's address can't
+  change their profile. `TERMS_VERSION` in `src/contest.ts` is the version
+  agreed to; bump it to make everyone agree again before submitting.
+- **Profile:** email, name, country, Instagram, bio (optional) and a photo
+  (optional, `artists/<id>/` in R2, staff only). Submissions copy name,
+  country and Instagram at the moment they're sent, so later edits don't
+  change what judges saw. Staff see the bio and photo under each entry.
 - **Drafts** live in `entries`, never in `submissions`. Files upload to
   `drafts/contest-<id>/<entry>/` in R2 (judges can't reach that path) and are
   copied to `contest-<id>/<public-id>.<ext>` on submit.

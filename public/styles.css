@@ -1555,3 +1555,8 @@ ub-criteria-bar {
    — it's a WYSIWYG preview of an outgoing email that keeps the public
    site's own brand template, not the admin console's dark theme.
    ========================================================================== */
+
+/* Artist profile (bio + photo) under an entry in the admin console */
+.a-artist summary { cursor: pointer; }
+.a-artist p { margin: 4px 0 0; max-width: 46ch; white-space: pre-line; }
+.a-artist-photo { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: 50%; margin-top: 6px; }

@@ -215,8 +215,17 @@ Full request and response shapes are in the interactive reference at `/docs/`.
    A new code cancels the previous one. Same answer for new and known
    addresses. Limits: 3 per address per 15 minutes (`429 too_many_codes`,
    with `retryAfter` seconds).
+
+   **Creating an account in one step:** also send `profile` `{ name, country,
+   instagram?, bio?, acceptTerms }` (where `acceptTerms` is the contest's
+   `termsVersion`) and optionally `photo` (base64 JPG/PNG/WebP under 5 MB).
+   They're held with the code and saved when it's verified, by code or by
+   link, in any browser. A new account gets everything; an existing account
+   only gets fields that are still empty, so a code requested for someone
+   else's address can't change their profile.
 2. `POST /artists/sessions` with `{ email, code }` or `{ token }` → `201 { session,
-   expiresAt, artist, isNew }`. Wrong code: `400 invalid_code { attemptsLeft }`;
+   expiresAt, artist, isNew, applied }`, where `applied` lists the details
+   from step 1 that were saved. Wrong code: `400 invalid_code { attemptsLeft }`;
    after 5 wrong codes `423 code_locked`; expired or used: `410 code_expired`.
    The profile is created here (not when the code is sent), and earlier
    one-shot submissions with the same email are linked to it. Sessions last
@@ -232,11 +241,21 @@ only.
 
 ### Profile
 
-`GET /me` → `{ email, name, country, instagram, complete }`.
-`PATCH /me` `{ name?, country?, instagram? }`. Instagram is stored as a bare
-handle (`@Name` or `instagram.com/Name/` → `name`); anything else is
-`400 invalid_instagram`. The email can't change. Profile edits don't change
-entries already submitted, which keep a snapshot.
+`GET /me` → `{ email, name, country, instagram, bio, hasPhoto, photoId,
+termsVersion, termsAcceptedAt, termsAccepted, complete }`. `complete` means
+name and country are filled in and the current terms are accepted.
+
+`PATCH /me` `{ name?, country?, instagram?, bio?, acceptTerms? }`. Instagram is
+stored as a bare handle (`@Name` or `instagram.com/Name/` → `name`); anything
+else is `400 invalid_instagram`. Bio is cut to 1000 characters. `acceptTerms`
+must equal the contest's `termsVersion` (else `400 terms_outdated`); when the
+terms change, artists must agree again before submitting. The email can't
+change. Profile edits don't change entries already submitted, which keep a
+snapshot.
+
+`PUT /me/photo` (raw JPG, PNG or WebP under 5 MB) replaces the profile photo;
+`GET` serves it and `DELETE` removes it. `photoId` changes with each upload.
+Photos are seen by staff in the admin console, not by judges.
 
 ### Entries
 
@@ -256,7 +275,7 @@ entries already submitted, which keep a snapshot.
 
 Submit errors: `409 submissions_closed`, `409 consent_outdated` (with the
 current `consentVersion`), `422 profile_incomplete` (name and country are
-required), and per entry `entry_incomplete` (with `missing`) or
+required), `422 terms_not_accepted` (with the current `termsVersion`), and per entry `entry_incomplete` (with `missing`) or
 `submission_limit_reached`.
 
 ### What judges see

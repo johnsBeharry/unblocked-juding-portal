@@ -3,8 +3,8 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { ApiKeyRow, AppEnv, ArtistRow, ContestRow, EntryAsset, EntryRow } from "../types";
 import { emailShell, escapeHtml, sendEmail } from "../email";
 import { eventStatement } from "../events";
-import { MAX_ASSETS, MOTION_LIMIT, detectFileType } from "../files";
-import { CONSENT_VERSION, acceptingSubmissions, publicContest, withdrawalsOpen } from "../contest";
+import { MAX_ASSETS, MOTION_LIMIT, STATIC_LIMIT, detectFileType } from "../files";
+import { CONSENT_VERSION, TERMS_VERSION, acceptingSubmissions, publicContest, withdrawalsOpen } from "../contest";
 import { hmacHex, parseJsonObject, publicSubmissionId, randomToken, sha256Hex } from "../util";
 
 /**
@@ -42,6 +42,8 @@ const META_FIELDS = [
   "printing_method",
 ] as const;
 const FIELD_LIMITS: Record<string, number> = { title: 200, concept: 4000 };
+const BIO_LIMIT = 1000;
+const PHOTO_TYPES: Record<string, string> = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" };
 
 type Ctx = Context<AppEnv>;
 
@@ -106,13 +108,66 @@ const requireContest: MiddlewareHandler<AppEnv> = async (c, next) => {
 // ---------- shapes ----------
 
 function profileJson(a: ArtistRow) {
+  const termsAccepted = a.terms_version === TERMS_VERSION;
   return {
     email: a.email,
     name: a.name,
     country: a.country,
     instagram: a.instagram,
-    complete: Boolean(a.name && a.country),
+    bio: a.bio,
+    hasPhoto: Boolean(a.photo_key),
+    // Changes when the photo does, so the page can bust its cache.
+    photoId: a.photo_key ? a.photo_key.split("/").pop()!.split(".")[0] : null,
+    termsVersion: a.terms_version,
+    termsAcceptedAt: a.terms_accepted_at,
+    termsAccepted,
+    complete: Boolean(a.name && a.country && termsAccepted),
   };
+}
+
+type ProfileInput = { name?: string; country?: string; instagram?: string; bio?: string; termsVersion?: string };
+
+/** Reads profile fields from a request body. Only fields that are present are returned. */
+function readProfile(body: Record<string, unknown>): { profile: ProfileInput } | { error: string } {
+  const profile: ProfileInput = {};
+  if (body.name !== undefined) profile.name = cleanText(body.name, 200);
+  if (body.country !== undefined) profile.country = cleanText(body.country, 100);
+  if (body.bio !== undefined) profile.bio = cleanText(body.bio, BIO_LIMIT);
+  if (body.instagram !== undefined) {
+    const handle = normalizeInstagram(body.instagram);
+    if (handle === null) return { error: "invalid_instagram" };
+    profile.instagram = handle;
+  }
+  if (body.acceptTerms !== undefined && body.acceptTerms !== null && body.acceptTerms !== false) {
+    // The page sends the version it showed, so an outdated page can't accept newer terms.
+    if (body.acceptTerms !== TERMS_VERSION) return { error: "terms_outdated" };
+    profile.termsVersion = TERMS_VERSION;
+  }
+  return { profile };
+}
+
+/** JPG, PNG or WebP under 5 MB, checked by content. */
+function detectPhoto(bytes: Uint8Array): string | null {
+  const t = detectFileType(bytes);
+  if (t && (t.ext === "jpg" || t.ext === "png")) return t.ext;
+  const tag = (o: number) => String.fromCharCode(...bytes.slice(o, o + 4));
+  if (bytes.length > 12 && tag(0) === "RIFF" && tag(8) === "WEBP") return "webp";
+  return null;
+}
+
+function decodeBase64(data: string): Uint8Array | null {
+  try {
+    const bin = atob(data.replace(/^data:[^,]*,/, ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+async function putPhoto(c: Ctx, key: string, bytes: Uint8Array, ext: string) {
+  await c.env.POSTERS.put(key, bytes, { httpMetadata: { contentType: PHOTO_TYPES[ext] } });
 }
 
 function parseAssets(raw: string): EntryAsset[] {
@@ -227,14 +282,18 @@ function spacedCode(code: string): string {
   return `${code.slice(0, 3)} ${code.slice(3)}`;
 }
 
-function signinEmail(name: string, code: string, link: string | null): string {
+function signinEmail(name: string, code: string, link: string | null, creating: boolean): string {
   const greeting = name ? `Hey ${escapeHtml(firstName(name))},` : "Hey,";
+  const intro = creating
+    ? `<p>Enter this code to verify your email and create your UNBLOCKED account.</p>`
+    : "";
   const linkPart = link
-    ? `<p>→ <a href="${link}">Sign in to UNBLOCKED</a></p>
+    ? `<p>→ <a href="${link}">${creating ? "Verify your email" : "Sign in to UNBLOCKED"}</a></p>
     <p>If that doesn't work, paste this into your browser:<br>${link}</p>`
     : "";
   return emailShell(`
     <p>${greeting}</p>
+    ${intro}
     <p>Your code is <strong>${spacedCode(code)}</strong>. It works once and expires in ${CODE_TTL_MINUTES} minutes.</p>
     ${linkPart}
     <p>Didn't request this? Just ignore it.</p>`);
@@ -343,8 +402,31 @@ artists.post("/artists/codes", requireKey, async (c) => {
     return c.json({ error: "too_many_codes", retryAfter: Math.max(1, recent?.wait ?? 60) }, 429);
   }
 
+  // Details typed on the form travel with the code and are saved when the
+  // email is verified, so nothing is lost if the link opens in another browser.
+  let pending: ProfileInput | null = null;
+  if (body?.profile && typeof body.profile === "object") {
+    const read = readProfile(body.profile);
+    if ("error" in read) return c.json({ error: read.error }, 400);
+    pending = read.profile;
+  }
+  let photo: { bytes: Uint8Array; ext: string } | null = null;
+  if (typeof body?.photo === "string" && body.photo) {
+    const bytes = decodeBase64(body.photo);
+    if (!bytes || !bytes.byteLength) return c.json({ error: "invalid_photo" }, 400);
+    if (bytes.byteLength > STATIC_LIMIT) return c.json({ error: "file_too_large", limitBytes: STATIC_LIMIT }, 413);
+    const ext = detectPhoto(bytes);
+    if (!ext) return c.json({ error: "unsupported_file_type", accepted: ["jpg", "png", "webp"] }, 415);
+    photo = { bytes, ext };
+  }
+
   const code = randomCode();
   const linkToken = randomToken(32);
+  let pendingPhotoKey: string | null = null;
+  if (photo) {
+    pendingPhotoKey = `artists/pending/${randomToken(16)}.${photo.ext}`;
+    await putPhoto(c, pendingPhotoKey, photo.bytes, photo.ext);
+  }
   // X-Client-IP is set by the links Worker; it's only trusted because a valid key came with it.
   const ip = cleanText(c.req.header("x-client-ip"), 64) || null;
   await c.env.DB.batch([
@@ -353,14 +435,17 @@ artists.post("/artists/codes", requireKey, async (c) => {
       "UPDATE artist_login_codes SET used_at = datetime('now') WHERE email = ? AND used_at IS NULL",
     ).bind(email),
     c.env.DB.prepare(
-      `INSERT INTO artist_login_codes (email, code_hmac, link_token_hash, contest_id, ip, expires_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now', '+${CODE_TTL_MINUTES} minutes'))`,
+      `INSERT INTO artist_login_codes
+         (email, code_hmac, link_token_hash, contest_id, ip, pending_profile, pending_photo_key, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '+${CODE_TTL_MINUTES} minutes'))`,
     ).bind(
       email,
       await hmacHex(c.env.ARTIST_CODE_SECRET, `${email}:${code}`),
       await sha256Hex(linkToken),
       contest.id,
       ip,
+      pending ? JSON.stringify(pending) : null,
+      pendingPhotoKey,
     ),
   ]);
 
@@ -373,7 +458,7 @@ artists.post("/artists/codes", requireKey, async (c) => {
     artistId: artist?.id ?? null,
     kind: "signin",
     subject: `Your UNBLOCKED code: ${spacedCode(code)}`,
-    html: signinEmail(artist?.name || "", code, link),
+    html: signinEmail(artist?.name || pending?.name || "", code, link, !artist && !!pending),
   });
   if (!sent) return c.json({ error: "email_failed" }, 502);
 
@@ -384,7 +469,14 @@ artists.post("/artists/codes", requireKey, async (c) => {
   );
 });
 
-type CodeRow = { id: number; email: string; code_hmac: string; attempts: number };
+type CodeRow = {
+  id: number;
+  email: string;
+  code_hmac: string;
+  attempts: number;
+  pending_profile: string | null;
+  pending_photo_key: string | null;
+};
 
 artists.post("/artists/sessions", requireKey, async (c) => {
   const body = await c.req.json().catch(() => null);
@@ -393,7 +485,7 @@ artists.post("/artists/sessions", requireKey, async (c) => {
   let row: CodeRow | null = null;
   if (typeof body?.token === "string" && body.token) {
     row = await c.env.DB.prepare(
-      `SELECT id, email, code_hmac, attempts FROM artist_login_codes
+      `SELECT id, email, code_hmac, attempts, pending_profile, pending_photo_key FROM artist_login_codes
        WHERE link_token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')`,
     )
       .bind(await sha256Hex(body.token))
@@ -405,7 +497,7 @@ artists.post("/artists/sessions", requireKey, async (c) => {
     if (!EMAIL_RE.test(email) || code.length !== 6) return c.json({ error: "invalid_code", attemptsLeft: null }, 400);
 
     row = await c.env.DB.prepare(
-      `SELECT id, email, code_hmac, attempts FROM artist_login_codes
+      `SELECT id, email, code_hmac, attempts, pending_profile, pending_photo_key FROM artist_login_codes
        WHERE email = ? AND used_at IS NULL AND expires_at > datetime('now')
        ORDER BY id DESC LIMIT 1`,
     )
@@ -437,11 +529,15 @@ artists.post("/artists/sessions", requireKey, async (c) => {
   const existing = await c.env.DB.prepare("SELECT * FROM artists WHERE email = ?")
     .bind(row.email)
     .first<ArtistRow>();
-  const artist =
+  let artist =
     existing ||
     (await c.env.DB.prepare("INSERT INTO artists (email) VALUES (?) RETURNING *")
       .bind(row.email)
       .first<ArtistRow>())!;
+  const applied = await applyPending(c, artist, row, !existing);
+  if (applied.length) {
+    artist = (await c.env.DB.prepare("SELECT * FROM artists WHERE id = ?").bind(artist.id).first<ArtistRow>())!;
+  }
 
   const rawSession = randomToken(32);
   const session = await c.env.DB.prepare(
@@ -460,8 +556,8 @@ artists.post("/artists/sessions", requireKey, async (c) => {
     ).bind(artist.id, artist.email),
     // Expired credentials are not records and can be purged, like the judge tables.
     c.env.DB.prepare("DELETE FROM artist_sessions WHERE expires_at < datetime('now')"),
-    c.env.DB.prepare("DELETE FROM artist_login_codes WHERE expires_at < datetime('now', '-1 day')"),
   ]);
+  await purgeOldCodes(c);
 
   return c.json(
     {
@@ -469,10 +565,70 @@ artists.post("/artists/sessions", requireKey, async (c) => {
       expiresAt: session?.expires_at,
       artist: profileJson(artist),
       isNew: !existing,
+      applied,
     },
     201,
   );
 });
+
+/**
+ * Saves the details sent with the code. A new account takes all of them. An
+ * existing account only gets fields that are still empty, so someone who
+ * requests a code for another person's address can't overwrite their profile
+ * even if that person later uses the code. Returns the fields saved.
+ */
+async function applyPending(c: Ctx, artist: ArtistRow, row: CodeRow, isNew: boolean): Promise<string[]> {
+  const applied: string[] = [];
+  let pending: ProfileInput = {};
+  try {
+    pending = row.pending_profile ? JSON.parse(row.pending_profile) : {};
+  } catch {
+    pending = {};
+  }
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const field of ["name", "country", "instagram", "bio"] as const) {
+    const value = pending[field];
+    if (!value) continue;
+    if (!isNew && artist[field]) continue;
+    sets.push(`${field} = ?`);
+    values.push(value);
+    applied.push(field);
+  }
+  if (pending.termsVersion === TERMS_VERSION && artist.terms_version !== TERMS_VERSION) {
+    sets.push("terms_version = ?", "terms_accepted_at = datetime('now')");
+    values.push(TERMS_VERSION);
+    applied.push("terms");
+  }
+  if (row.pending_photo_key && (isNew || !artist.photo_key)) {
+    const object = await c.env.POSTERS.get(row.pending_photo_key);
+    if (object) {
+      const ext = row.pending_photo_key.split(".").pop() || "jpg";
+      const key = `artists/${artist.id}/photo-${randomToken(8)}.${ext}`;
+      await c.env.POSTERS.put(key, await object.arrayBuffer(), { httpMetadata: object.httpMetadata });
+      sets.push("photo_key = ?");
+      values.push(key);
+      applied.push("photo");
+    }
+  }
+  if (row.pending_photo_key) await c.env.POSTERS.delete(row.pending_photo_key);
+  if (sets.length) {
+    await c.env.DB.prepare(`UPDATE artists SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`)
+      .bind(...values, artist.id)
+      .run();
+  }
+  return applied;
+}
+
+/** Old codes and the photos sent with them aren't records and can go after a day. */
+async function purgeOldCodes(c: Ctx) {
+  const old = await c.env.DB.prepare(
+    "SELECT pending_photo_key FROM artist_login_codes WHERE expires_at < datetime('now', '-1 day') AND pending_photo_key IS NOT NULL",
+  ).all<{ pending_photo_key: string }>();
+  const keys = (old.results || []).map((r) => r.pending_photo_key);
+  if (keys.length) await c.env.POSTERS.delete(keys);
+  await c.env.DB.prepare("DELETE FROM artist_login_codes WHERE expires_at < datetime('now', '-1 day')").run();
+}
 
 /** For the sign-in link's confirm page: checks the token without using it up. */
 artists.get("/artists/sessions/check", requireKey, async (c) => {
@@ -503,22 +659,61 @@ artists.patch("/me", requireKey, requireArtist, async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== "object") return c.json({ error: "invalid_request" }, 400);
   const artist = c.get("artist");
-
-  const name = body.name !== undefined ? cleanText(body.name, 200) : artist.name;
-  const country = body.country !== undefined ? cleanText(body.country, 100) : artist.country;
-  let instagram = artist.instagram;
-  if (body.instagram !== undefined) {
-    const handle = normalizeInstagram(body.instagram);
-    if (handle === null) return c.json({ error: "invalid_instagram" }, 400);
-    instagram = handle;
-  }
+  const read = readProfile(body);
+  if ("error" in read) return c.json({ error: read.error }, 400);
+  const p = read.profile;
 
   const row = await c.env.DB.prepare(
-    `UPDATE artists SET name = ?, country = ?, instagram = ?, updated_at = datetime('now')
+    `UPDATE artists SET name = ?, country = ?, instagram = ?, bio = ?,
+       terms_version = ?, terms_accepted_at = CASE WHEN ? THEN datetime('now') ELSE terms_accepted_at END,
+       updated_at = datetime('now')
      WHERE id = ? RETURNING *`,
   )
-    .bind(name, country, instagram, artist.id)
+    .bind(
+      p.name ?? artist.name,
+      p.country ?? artist.country,
+      p.instagram ?? artist.instagram,
+      p.bio ?? artist.bio,
+      p.termsVersion ?? artist.terms_version,
+      p.termsVersion && p.termsVersion !== artist.terms_version ? 1 : 0,
+      artist.id,
+    )
     .first<ArtistRow>();
+  return c.json(profileJson(row!));
+});
+
+/** Profile photo: raw JPG, PNG or WebP body under 5 MB. Replaces any earlier photo. */
+artists.put("/me/photo", requireKey, requireArtist, async (c) => {
+  const length = Number(c.req.header("content-length") || 0);
+  if (length > STATIC_LIMIT) return c.json({ error: "file_too_large", limitBytes: STATIC_LIMIT }, 413);
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  if (!bytes.byteLength) return c.json({ error: "file_required" }, 400);
+  if (bytes.byteLength > STATIC_LIMIT) return c.json({ error: "file_too_large", limitBytes: STATIC_LIMIT }, 413);
+  const ext = detectPhoto(bytes);
+  if (!ext) return c.json({ error: "unsupported_file_type", accepted: ["jpg", "png", "webp"] }, 415);
+  const artist = c.get("artist");
+  const key = `artists/${artist.id}/photo-${randomToken(8)}.${ext}`;
+  await putPhoto(c, key, bytes, ext);
+  const row = await c.env.DB.prepare(
+    "UPDATE artists SET photo_key = ?, updated_at = datetime('now') WHERE id = ? RETURNING *",
+  )
+    .bind(key, artist.id)
+    .first<ArtistRow>();
+  // The old photo isn't a contest record, so it can go.
+  if (artist.photo_key) await c.env.POSTERS.delete(artist.photo_key);
+  return c.json(profileJson(row!));
+});
+
+artists.get("/me/photo", requireKey, requireArtist, (c) => streamObject(c, c.get("artist").photo_key));
+
+artists.delete("/me/photo", requireKey, requireArtist, async (c) => {
+  const artist = c.get("artist");
+  const row = await c.env.DB.prepare(
+    "UPDATE artists SET photo_key = NULL, updated_at = datetime('now') WHERE id = ? RETURNING *",
+  )
+    .bind(artist.id)
+    .first<ArtistRow>();
+  if (artist.photo_key) await c.env.POSTERS.delete(artist.photo_key);
   return c.json(profileJson(row!));
 });
 
@@ -930,6 +1125,9 @@ async function submitPreflight(c: Ctx, consentVersion: unknown): Promise<Respons
     return c.json({ error: "consent_outdated", consentVersion: CONSENT_VERSION }, 409);
   }
   if (!artist.name || !artist.country) return c.json({ error: "profile_incomplete" }, 422);
+  if (artist.terms_version !== TERMS_VERSION) {
+    return c.json({ error: "terms_not_accepted", termsVersion: TERMS_VERSION }, 422);
+  }
   return null;
 }
 

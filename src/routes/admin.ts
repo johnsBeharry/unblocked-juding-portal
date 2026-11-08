@@ -161,8 +161,10 @@ admin.get("/contests/:id", async (c) => {
        (SELECT reason FROM entry_events ev WHERE ev.submission_id = s.id AND ev.type = 'withdrawn'
         ORDER BY ev.id DESC LIMIT 1) AS withdrawn_reason,
        (SELECT actor FROM entry_events ev WHERE ev.submission_id = s.id AND ev.type = 'withdrawn'
-        ORDER BY ev.id DESC LIMIT 1) AS withdrawn_by
-     FROM submissions s WHERE s.contest_id = ? ORDER BY s.id`,
+        ORDER BY ev.id DESC LIMIT 1) AS withdrawn_by,
+       a.bio AS artist_bio, a.photo_key AS artist_photo_key
+     FROM submissions s LEFT JOIN artists a ON a.id = s.artist_id
+     WHERE s.contest_id = ? ORDER BY s.id`,
   )
     .bind(contest.id)
     .all<SubmissionRow & { yes_votes: number; no_votes: number; ratings_count: number }>();
@@ -187,6 +189,9 @@ admin.get("/contests/:id", async (c) => {
       ...s,
       metadata: parseJsonObject(s.metadata),
       fileUrl: s.file_key ? `/files/${s.file_key}` : null,
+      artistPhotoUrl: (s as { artist_photo_key?: string | null }).artist_photo_key
+        ? `/files/${(s as { artist_photo_key?: string }).artist_photo_key}`
+        : null,
     })),
     results: await computeResults(c.env, contest.id, criteria),
   });

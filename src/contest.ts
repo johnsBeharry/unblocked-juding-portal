@@ -7,6 +7,9 @@ import type { ContestRow } from "./types";
  */
 export const CONSENT_VERSION = "2026-11-08";
 
+/** Version of the Terms of Service and Privacy Policy an account agrees to. */
+export const TERMS_VERSION = "2026-11-08";
+
 /** True once closes_at (ISO 8601, UTC) has passed. No closing date = never. */
 export function isPastClosing(contest: Pick<ContestRow, "closes_at">, now = Date.now()): boolean {
   if (!contest.closes_at) return false;
@@ -39,5 +42,6 @@ export function publicContest(contest: ContestRow) {
     maxEntriesPerArtist: contest.max_entries_per_artist,
     withdrawalsOpen: withdrawalsOpen(contest),
     consentVersion: CONSENT_VERSION,
+    termsVersion: TERMS_VERSION,
   };
 }

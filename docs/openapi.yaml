@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: UNBLOCKED Judging Portal — External Submission API
-  version: "1.1.0"
+  version: "1.2.0"
   description: |
     Lets the submission form push poster entries into the judging portal, and
     lets artists sign in, save drafts and come back to submit more. The form
@@ -79,6 +79,7 @@ paths:
                 maxEntriesPerArtist: 5
                 withdrawalsOpen: true
                 consentVersion: "2026-11-08"
+                termsVersion: "2026-11-08"
         "404":
           description: Unknown slug, or the contest is archived.
           content:
@@ -221,6 +222,14 @@ paths:
         minutes. A new code cancels any older unused one. The answer is the
         same whether or not the address has entered before. No profile is
         created until the code is verified.
+
+        To create an account in one step, send the details typed on the form
+        as `profile` (and optionally `photo`). They're held with the code and
+        saved when it's verified, by code or by link, in any browser. A new
+        account gets all of them. An existing account only gets fields that
+        are still empty, so requesting a code for someone else's address
+        can't change their profile. The response to verification lists what
+        was saved in `applied`.
       security:
         - BearerKey: []
         - ApiKeyHeader: []
@@ -236,6 +245,11 @@ paths:
               properties:
                 email: { type: string, format: email, example: ana@studio.com }
                 contest: { type: string, description: "Contest slug the key is valid for.", example: test-november }
+                profile: { $ref: "#/components/schemas/ProfileInput" }
+                photo:
+                  type: string
+                  format: byte
+                  description: Profile photo as base64 (JPG, PNG or WebP, under 5 MB decoded). A `data:` prefix is allowed.
       responses:
         "202":
           description: Email sent.
@@ -246,9 +260,16 @@ paths:
                 properties:
                   expiresInSeconds: { type: integer, example: 900 }
                   resendAfterSeconds: { type: integer, example: 30 }
-        "400": { $ref: "#/components/responses/BadRequest" }
+        "400":
+          description: "`invalid_email`, `invalid_instagram`, `terms_outdated` or `invalid_photo`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: terms_outdated }
         "401": { $ref: "#/components/responses/InvalidKey" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/BadType" }
         "429":
           description: More than 3 codes for this address in 15 minutes.
           content:
@@ -303,6 +324,11 @@ paths:
                   expiresAt: { type: string, example: "2026-12-08 14:02:11" }
                   artist: { $ref: "#/components/schemas/Profile" }
                   isNew: { type: boolean }
+                  applied:
+                    type: array
+                    description: Details from the code request that were saved.
+                    items: { type: string, enum: [name, country, instagram, bio, terms, photo] }
+                    example: [name, country, instagram, bio, terms, photo]
         "400":
           description: Wrong code.
           content:
@@ -386,12 +412,15 @@ paths:
     patch:
       tags: [Artist]
       operationId: updateProfile
-      summary: Update name, country or Instagram
+      summary: Update profile details, or accept the terms
       description: |
         Partial update. Instagram is stored as a bare handle: `@Name` and
-        `instagram.com/Name/` become `name`; an empty string removes it. The
-        email can't be changed (signing in with another address gives a
-        separate profile). Changes don't affect entries already submitted.
+        `instagram.com/Name/` become `name`; an empty string removes it. Bio
+        is cut to 1000 characters. Send `acceptTerms` with the contest's
+        current `termsVersion` to record agreement to the Terms of Service and
+        Privacy Policy. The email can't be changed (signing in with another
+        address gives a separate profile). Changes don't affect entries
+        already submitted.
       security:
         - BearerKey: []
           ArtistSession: []
@@ -399,12 +428,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                name: { type: string, maxLength: 200 }
-                country: { type: string, maxLength: 100 }
-                instagram: { type: string, example: "@ana.ruiz.studio" }
+            schema: { $ref: "#/components/schemas/ProfileInput" }
       responses:
         "200":
           description: Updated profile.
@@ -412,11 +436,66 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Profile" }
         "400":
-          description: Not a valid Instagram handle.
+          description: "`invalid_instagram` or `terms_outdated`."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               example: { error: invalid_instagram }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /me/photo:
+    get:
+      tags: [Artist]
+      operationId: getProfilePhoto
+      summary: The signed-in artist's profile photo
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: The image.
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Artist]
+      operationId: putProfilePhoto
+      summary: Upload or replace the profile photo
+      description: Raw image body (JPG, PNG or WebP, under 5 MB), checked by content. Replaces any earlier photo.
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          description: Updated profile (with a new `photoId`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/BadType" }
+    delete:
+      tags: [Artist]
+      operationId: deleteProfilePhoto
+      summary: Remove the profile photo
+      security:
+        - BearerKey: []
+          ArtistSession: []
+      responses:
+        "200":
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
   /contests/{slug}/me/entries:
@@ -750,7 +829,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422":
-          description: The artist's name or country is missing.
+          description: "`profile_incomplete` (name or country missing) or `terms_not_accepted` (with the current `termsVersion`)."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -788,7 +867,7 @@ paths:
         "409":
           description: "`submissions_closed`, `consent_outdated`, `submission_limit_reached` or `entry_locked`."
         "422":
-          description: "`entry_incomplete` (with `missing`) or `profile_incomplete`."
+          description: "`entry_incomplete` (with `missing`), `profile_incomplete` or `terms_not_accepted` (with `termsVersion`)."
 
   /contests/{slug}/me/entries/{id}/withdraw:
     post:
@@ -959,6 +1038,9 @@ components:
         consentVersion:
           type: string
           description: Version of the submission terms. Send it back when submitting.
+        termsVersion:
+          type: string
+          description: Version of the Terms of Service and Privacy Policy. Send it as `acceptTerms`.
 
     Profile:
       type: object
@@ -967,7 +1049,31 @@ components:
         name: { type: string }
         country: { type: string }
         instagram: { type: string, description: "Handle without @, or empty." }
-        complete: { type: boolean, description: Name and country are filled in. }
+        bio: { type: string }
+        hasPhoto: { type: boolean }
+        photoId:
+          type: string
+          nullable: true
+          description: Changes whenever the photo does. Use it to refresh a cached image.
+        termsVersion:
+          type: string
+          nullable: true
+          description: Version of the terms the artist last agreed to.
+        termsAcceptedAt: { type: string, nullable: true, example: "2026-11-08 14:02:11" }
+        termsAccepted: { type: boolean, description: Agreed to the current version. }
+        complete: { type: boolean, description: Name and country are filled in and the current terms are accepted. }
+
+    ProfileInput:
+      type: object
+      properties:
+        name: { type: string, maxLength: 200 }
+        country: { type: string, maxLength: 100 }
+        instagram: { type: string, example: "@ana.ruiz.studio" }
+        bio: { type: string, maxLength: 1000 }
+        acceptTerms:
+          type: string
+          description: The contest's current `termsVersion`, to agree to the Terms of Service and Privacy Policy.
+          example: "2026-11-08"
 
     EntryFields:
       type: object

@@ -358,7 +358,10 @@ function contestDetailMarkup() {
       <tr class="${rowClass}">
         <td class="cell-thumb">${sub.fileUrl ? `<a href="${esc(sub.fileUrl)}" target="_blank" rel="noopener">${thumb}</a>` : thumb}</td>
         <td><strong>${esc(sub.title)}</strong><br><small>${esc(sub.public_id)} · ${esc([sub.artist_name, sub.country].filter(Boolean).join(", ") || "anonymous")}</small>
-          ${contact ? `<br><small>${esc(contact)}</small>` : ""}${badge}</td>
+          ${contact ? `<br><small>${esc(contact)}</small>` : ""}
+          ${sub.artist_bio || sub.artistPhotoUrl ? `<details class="a-artist"><summary><small>Artist profile</small></summary>
+            ${sub.artistPhotoUrl ? `<img class="a-artist-photo" src="${esc(sub.artistPhotoUrl)}" alt="" loading="lazy">` : ""}
+            ${sub.artist_bio ? `<p><small>${esc(sub.artist_bio)}</small></p>` : ""}</details>` : ""}${badge}</td>
         <td>${sub.yes_votes} yes / ${sub.no_votes} no</td>
         <td>${sub.ratings_count}</td>
         <td><label class="a-check-label"><input type="checkbox" data-advance-check value="${sub.id}" ${sub.advanced && inPool ? "checked" : ""} ${inPool ? "" : "disabled"}> R2</label></td>

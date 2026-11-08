@@ -29,14 +29,17 @@ app.route("/api/admin", admin);
 // Poster files from R2. Keys look like "contest-<id>/<public-id>.<ext>";
 // judges may only fetch files for contests they are on the panel of, and only
 // for entries still in the judging pool (not withdrawn or disqualified).
-// Staff can open every file. Draft files live under drafts/ and never match.
+// Staff can open every file, plus artist profile photos. Draft files live
+// under drafts/ and never match.
 app.get("/files/*", csrfGuard, requireUser, async (c) => {
   const key = c.req.path.replace(/^\/files\//, "");
   const match = /^contest-(\d+)\//.exec(key);
-  if (!match) return c.json({ error: "not_found" }, 404);
-
   const user = c.get("user");
-  if (user.role === "judge") {
+  // Artist profile photos (artists/<id>/…) are for staff only.
+  const artistPhoto = /^artists\/\d+\//.test(key);
+  if (!match && !(artistPhoto && user.role !== "judge")) return c.json({ error: "not_found" }, 404);
+
+  if (match && user.role === "judge") {
     const onPanel = await c.env.DB.prepare(
       "SELECT 1 AS ok FROM contest_judges WHERE contest_id = ? AND user_id = ?",
     )
