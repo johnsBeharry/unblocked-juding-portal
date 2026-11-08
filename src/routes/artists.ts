@@ -285,10 +285,10 @@ function spacedCode(code: string): string {
 function signinEmail(name: string, code: string, link: string | null, creating: boolean): string {
   const greeting = name ? `Hey ${escapeHtml(firstName(name))},` : "Hey,";
   const intro = creating
-    ? `<p>Enter this code to verify your email and create your UNBLOCKED account.</p>`
+    ? `<p>Enter this code to confirm your email and join UNBLOCKED.</p>`
     : "";
   const linkPart = link
-    ? `<p>→ <a href="${link}">${creating ? "Verify your email" : "Sign in to UNBLOCKED"}</a></p>
+    ? `<p>→ <a href="${link}">${creating ? "Confirm your email and join" : "Sign in to UNBLOCKED"}</a></p>
     <p>If that doesn't work, paste this into your browser:<br>${link}</p>`
     : "";
   return emailShell(`
